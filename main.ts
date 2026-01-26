@@ -12,6 +12,40 @@ class Tokenizer {
     }
 }
 
+// ---- Utils ----
+
+// Q: what weights are provided? Presumably many?
+function rmsnorm(out: Float32Array, x: Float32Array, weight: Float32Array) {
+    let ss = 0.0f;
+    for (const xi of x) { ss += xi*xi; }
+    ss /= x.length;
+    ss += 1e-5f; // Q: avoid vainishing gradients?
+
+    ss = 1.0 / sqrt(ss);
+    for (let i = 0; i < out.length; i++) {
+        out[i] = weight[i] * ss * x[i];
+    }
+}
+
+function softmax(x: Float32Array) {
+    let max_val = x[0];
+    for (let i = 1; i < x.length; i++) {
+        if (x[i] > max_val) {
+            max_val = x[i];
+        }
+    }
+
+    let sum = 0.0f;
+    for (let i = 0; i < x.length; i++) {
+        x[i] = Math.fround(Math.exp(x[i] - max_val));
+        sum += x[i];
+    }
+
+    for (let i = 0; i < x.length; i++) {
+        x[i] /= sum;
+    }
+}
+
 interface Config {
     dim: number;
     hidden_dim: number;
@@ -47,7 +81,7 @@ interface Weights {
 }
 interface RuntimeBuffers {
     // current wave of activations
-    x: Float32Array;
+    x: Float32Array; // p->dim
 
     // TODO: ?
     xb: Float32Array;
