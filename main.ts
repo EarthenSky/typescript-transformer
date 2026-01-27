@@ -46,6 +46,20 @@ function softmax(x: Float32Array) {
     }
 }
 
+// TODO: are d and n different in the provided example?
+// cause I'd usually call them nxm...0
+function vecmatmul(out: Float32Array, x: Float32Array, y: Float32Array, n: number, d: number) {
+    for (let i = 0; i < d; i++) {
+        let val = 0.0f;
+        for (let j = 0; j < n; j++) {
+            // ensure out is zero initialized
+            out[i * n + j] += x[j] * y[i * n + j];
+        }
+    }
+}
+
+// ---- Inference ----
+
 interface Config {
     dim: number;
     hidden_dim: number;
