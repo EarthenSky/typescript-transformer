@@ -15,11 +15,15 @@ class Tokenizer {
 // ---- Utils ----
 
 // Q: what weights are provided? Presumably many?
-function rmsnorm(out: Float32Array, x: Float32Array, weight: Float32Array) {
+function rmsnorm(
+    out: Float32Array,
+    x: Float32Array,
+    weight: Float32Array
+) {
     let ss = 0.0f;
     for (const xi of x) { ss += xi*xi; }
     ss /= x.length;
-    ss += 1e-5f; // Q: avoid vainishing gradients?
+    ss += 1e-5f; // avoid LARGE ss after 1/x
 
     ss = 1.0 / sqrt(ss);
     for (let i = 0; i < out.length; i++) {
@@ -46,15 +50,19 @@ function softmax(x: Float32Array) {
     }
 }
 
-// TODO: are d and n different in the provided example?
-// cause I'd usually call them nxm...0
-function vecmatmul(out: Float32Array, x: Float32Array, y: Float32Array, n: number, d: number) {
-    for (let i = 0; i < d; i++) {
+function vecmatmul(
+    out: Float32Array, // (m,)
+    M: Float32Array,   // (n, m)
+    x: Float32Array,   // (n,)
+) {
+    const n = x.length;
+    const m = out.length;
+    for (let i = 0; i < m; i++) {
         let val = 0.0f;
         for (let j = 0; j < n; j++) {
-            // ensure out is zero initialized
-            out[i * n + j] += x[j] * y[i * n + j];
+            val += x[j] * M[i * n + j];
         }
+        out[i] = val;
     }
 }
 
@@ -72,9 +80,10 @@ interface Config {
 interface Weights {
     // stores the embedding for each token in the model's language
     token_embedding_table: Float32Array;
-    // TODO: what're these for?
-    rms_att_weight: Float32Array;
-    rms_ffn_weight: Float32Array;
+
+    // weights for rms norm
+    rms_att: Float32Array; // (layer, dim)
+    rms_ffn: Float32Array;
 
     // multi-head attention
     query: Float32Array;
@@ -88,23 +97,27 @@ interface Weights {
     w3: Float32Array;
 
     // final rmsnorm
-    rms_final_weight: Float32Array;
+    rms_final: Float32Array;
 
     // ???
     wcls: Float32Array;
 }
 interface RuntimeBuffers {
     // current wave of activations
-    x: Float32Array; // p->dim
+    x: Float32Array; // (dim,)
+    x_residual: Float32Array; // (dim,)
 
-    // TODO: ?
-    xb: Float32Array;
+    // TODO: this
     xb2: Float32Array;
     hb: Float32Array;
     hb2: Float32Array;
+
+    // for attention
     q: Float32Array;
     k: Float32Array;
     v: Float32Array;
+
+    // TODO: this
     att: Float32Array;
     logits: Float32Array;
 
@@ -118,7 +131,7 @@ class Transformer {
         readonly config: Config,
         readonly weights: Weights,
         // TODO: initialize these
-        readonly buffers: RuntimeBuffers
+        readonly b: RuntimeBuffers
     ) {}
 
     static create_buffers(readonly config: Config): RuntimeBuffers {
@@ -129,10 +142,26 @@ class Transformer {
     }
 
     forward(token: number, position: number) {
-        let embedding = null;
-        for (let layer_i: number = 0; layer_i < this.config.n_layers; layer_i++) {
+        const dim = config->dim;       
+        // TODO: finish this + understanding the kv cache logic. Read into MQA, briefly
+        const kv_dim = (dim * config->n_kv_heads) / config->n_heads;
+        // TODO: get x (the embedding) from the
+        // token embedding table
+        let x = null;
+
+        for (let layer_i = 0; layer_i < this.config.n_layers; layer_i++) {
             // TODO: implement this!
-            this.forward_layer();
+            // this.forward_layer();
+            rmsnorm(
+                b->x_residual,
+                x,
+                weights->rms_att + layer_i * dim
+            );
+           
+            // key and value point to the kv cache
+            const loff = l * config->seq_len * kv_dim; // kv cache layer offset for convenience
+            errs->k = s->key_cache + loff + pos * kv_dim;
+            s->v = s->value_cache + loff + pos * kv_dim; 
         }
     }
 
