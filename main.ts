@@ -14,7 +14,6 @@ class Tokenizer {
 
 // ---- Utils ----
 
-// Q: what weights are provided? Presumably many?
 function rmsnorm(
     out: Float32Array,
     x: Float32Array,
@@ -139,9 +138,9 @@ class Transformer {
         let head_size = config.dim / config.n_heads;
         let weights: Weights = {
 
-             query: new Float32Array(),
-             key: new Float32Array(),
-             value: new Float32Array(config.dim * config.n_kv_heads * config.head_size),
+             query: new Float32Array(config.dim * config.n_heads * head_size),
+             key: new Float32Array(config.dim * config.n_kv_heads * head_size),
+             value: new Float32Array(config.dim * config.n_kv_heads * head_size),
              output: new Float32Array(),
         };  
   
@@ -172,9 +171,13 @@ class Transformer {
         // TODO: finish this + understanding the kv cache logic. Read into MQA, briefly
         const head_size = dim / config.n_heads;
         const kv_dim =  config.n_kv_heads * head_size;
-        // TODO: get x (the embedding) from the
-        // token embedding table
-        let x = null;
+        
+        let x = b.x;
+        let content_row = weights
+            .token_embedding_table
+            .subarray(token * dim, dim);
+	// copy the token embedding into x
+	x.set(content_row);
 
         for (let layer_i = 0; layer_i < this.config.n_layers; layer_i++) {
             // TODO: implement this!
@@ -186,8 +189,8 @@ class Transformer {
            
             // key and value point to the kv cache
             const layer_off = layer_i * config.seq_len * kv_dim;
-            const key   = b->key_cache.subarray(layer_off + position * kv_dim, kv_dim);
-            const value = b->value_cache.subarray(layer_off + position * kv_dim, kv_dim);
+            const key   = b.key_cache.subarray(layer_off + position * kv_dim, kv_dim);
+            const value = b.value_cache.subarray(layer_off + position * kv_dim, kv_dim);
              
             vecmatmul(
                 b.q,
@@ -195,7 +198,7 @@ class Transformer {
                 b.x_residual);
             vecmatmul(
                 key,
-                weights.key   + layer_i * dim*kv_dim
+                weights.key + layer_i * dim * kv_dim
                 b.x_residual);
             vecmatmul(
                 value,
@@ -211,7 +214,6 @@ class Transformer {
                 // how many vectors? 2 = q & k, 1 = q only
                 let rotn = (i < kv_dim ? 2 : 1);
                 for (let v = 0; v < rotn; v++) {
-                    // the vector to rotate (query or key)
                     let vec = (v == 0 ? query : key);
                     let v0 = vec[i];
                     let v1 = vec[i+1];
@@ -220,6 +222,49 @@ class Transformer {
                     vec[i+1] = v0 * Math.sin(val) + v1 * Math.cos(val);
                 }
             }
+
+	    // multihead attention
+            for (let hi = 0; hi < config.n_heads; hi++) {
+	        // get query vec for this head
+		let q   = b.q   + hi * head_size;
+		// attention scores for this head
+		let att = b.att + hi * config.seq_len;
+		// iter all timesteps, including current
+		for (let t = 0; t <= pos; t++) {
+		    // get the key vec for this head and timestep
+		    let k = b.key_cache.subarray(
+		         layer_off
+			 + t * kv_dim
+			 + Math.trunc(hi / kv_mul) * head_size
+	           );
+		   // TODO: clean up from here on
+                   // attention score is dot product of q and k
+		   let score = 0.0f;
+		   for (let i = 0; i < head_size; i++) {
+                        score += q[i] * k[i];
+                   }
+                   score /= sqrtf(head_size);
+                   // save the score to the attention buffer
+	           att[t] = score;
+	       }
+
+               // softmax the scores to get attention weights, from 0..pos inclusively
+               softmax(att, pos + 1);
+   
+               // weighted sum of the values, store back into x
+	       float* xb = s->xb + h * head_size;
+	       memset(xb, 0, head_size * sizeof(float));
+																																											            for (int t = 0; t <= pos; t++) {
+																																												                    // get the value vector for this head and at this timestep
+																																														                    float* v = s->value_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
+																																																                    // get the attention weight for this timestep
+																																																		                    float a = att[t];
+																																																				                    // accumulate the weighted value into xb
+																																																						                    for (int i = 0; i < head_size; i++) {
+																																																								                        xb[i] += a * v[i];
+																																																											                }
+																																																													            }
+																																																														            }
 
 
         }
