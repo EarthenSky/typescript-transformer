@@ -225,47 +225,52 @@ class Transformer {
 
 	    // multihead attention
             for (let hi = 0; hi < config.n_heads; hi++) {
-	        // get query vec for this head
-		let q   = b.q   + hi * head_size;
-		// attention scores for this head
-		let att = b.att + hi * config.seq_len;
+	        // vecs for this head
+		let q   = b.q.subarray(hi * head_size, head_size);
+		let att = b.att.subarray(hi * config.seq_len, config.seq_len);
+
 		// iter all timesteps, including current
 		for (let t = 0; t <= pos; t++) {
-		    // get the key vec for this head and timestep
 		    let k = b.key_cache.subarray(
 		         layer_off
 			 + t * kv_dim
-			 + Math.trunc(hi / kv_mul) * head_size
-	           );
-		   // TODO: clean up from here on
-                   // attention score is dot product of q and k
-		   let score = 0.0f;
-		   for (let i = 0; i < head_size; i++) {
+			 + Math.trunc(hi / kv_mul) * head_size,
+			 head_size);
+
+                    // attention score is dot product
+		    let score = 0.0f;
+		    for (let i = 0; i < head_size; i++)
                         score += q[i] * k[i];
-                   }
-                   score /= sqrtf(head_size);
-                   // save the score to the attention buffer
-	           att[t] = score;
-	       }
 
-               // softmax the scores to get attention weights, from 0..pos inclusively
-               softmax(att, pos + 1);
+	            att[t] = score / Math.sqrt(head_size);
+	        }
+
+                // softmax scores to get attention weights
+                softmax(att.subarray(0, pos + 1));
    
-               // weighted sum of the values, store back into x
-	       float* xb = s->xb + h * head_size;
-	       memset(xb, 0, head_size * sizeof(float));
-																																											            for (int t = 0; t <= pos; t++) {
-																																												                    // get the value vector for this head and at this timestep
-																																														                    float* v = s->value_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
-																																																                    // get the attention weight for this timestep
-																																																		                    float a = att[t];
-																																																				                    // accumulate the weighted value into xb
-																																																						                    for (int i = 0; i < head_size; i++) {
-																																																								                        xb[i] += a * v[i];
-																																																											                }
-																																																													            }
-																																																														            }
+                // weighted sum of the values, store back into x
+	        let x_residual = b.x_residual.subarray(h * head_size, head_size);
+		x_residual.fill(0, 0, head_size);
+	       
+	        for (let t = 0; t <= pos; t++) {
+	            // get value vec for this head and timestep
+                    let v = b.value_cache.subarray(
+		        layer_off
+		        + t * kv_dim
+		        + (h / kv_mul) * head_size,
+		        head_size
+		    );
 
+		    // accumulate the weighted values
+		    // from each ts with its respective
+		    // attention score.
+		    let a = att[t];
+		    for (let i = 0; i < head_size; i++)
+		        x_residual[i] += a * v[i];
+	        }
+            }
+
+            // TODO: what comes after attention?
 
         }
     }
