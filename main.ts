@@ -77,10 +77,9 @@ interface Config {
     seq_len: number;
 }
 interface Weights {
-    // stores the embedding for each token in the model's language
+    // stores the embedding for each token
     token_embedding_table: Float32Array;
 
-    // weights for rms norm
     rms_att: Float32Array; // (layer, dim)
     rms_ffn: Float32Array;
 
@@ -90,25 +89,19 @@ interface Weights {
     value: Float32Array;
     output: Float32Array;
 
-    // TODO: update these names with what feed forward network they actually are
-    w1: Float32Array;
-    w2: Float32Array;
-    w3: Float32Array;
+    ffn1: Float32Array;
+    ffn2: Float32Array;
+    ffn3: Float32Array;
 
-    // final rmsnorm
-    rms_final: Float32Array;
-
-    // ???
-    wcls: Float32Array;
+    rms_final: Float32Array; // (dim,)
+    classify: Float32Array; // (dim, vocab_size)
 }
 interface RuntimeBuffers {
     // current wave of activations
     x: Float32Array; // (dim,)
-    x_residual: Float32Array; // (dim,)
-
-    // TODO: this
+    xb: Float32Array; // (dim,)
     xb2: Float32Array;
-    hb: Float32Array;
+    hb: Float32Array; // (hidden_dim,)
     hb2: Float32Array;
 
     // for attention
@@ -118,7 +111,7 @@ interface RuntimeBuffers {
     // v: Float32Array; // (not dim,)
 
     // TODO: this
-    att: Float32Array;
+    att: Float32Array; // (n_heads, seq_len)
     logits: Float32Array;
 
     // kv cache
@@ -155,7 +148,8 @@ class Transformer {
         const kv_dim = config.n_kv_heads * head_size;
         return {
             x: new Float32Array(config.dim),
-            x_residual: new Float32Arrat(config.dim),
+            xb: new Float32Arrat(config.dim),
+            x_attn_out: new Float32Arrat(config.dim),
              
             q: new Float32Array(config.dim),
 
@@ -182,7 +176,7 @@ class Transformer {
         for (let layer_i = 0; layer_i < this.config.n_layers; layer_i++) {
             // TODO: implement this!
             rmsnorm(
-                b.x_residual,
+                b.xb,
                 x,
                 weights.rms_att + layer_i * dim
             );
@@ -195,15 +189,15 @@ class Transformer {
             vecmatmul(
                 b.q,
                 weights.query + layer_i * dim * dim
-                b.x_residual);
+                b.xb);
             vecmatmul(
                 key,
                 weights.key + layer_i * dim * kv_dim
-                b.x_residual);
+                b.xb);
             vecmatmul(
                 value,
                 weights.value + layer_i * dim * kv_dim
-                b.x_residual);
+                b.xb);
 
             // RoPE relative positional encoding: complex-valued rotate q and k in each head
             for (let i = 0; i < dim; i += 2) {
@@ -249,8 +243,8 @@ class Transformer {
                 softmax(att.subarray(0, pos + 1));
    
                 // weighted sum of the values, store back into x
-	        let x_residual = b.x_residual.subarray(h * head_size, head_size);
-		x_residual.fill(0, 0, head_size);
+	        let xb = b.xb.subarray(h * head_size, head_size);
+		xb.fill(0, 0, head_size);
 	       
 	        for (let t = 0; t <= pos; t++) {
 	            // get value vec for this head and timestep
@@ -264,15 +258,84 @@ class Transformer {
 		    // accumulate the weighted values
 		    // from each ts with its respective
 		    // attention score.
-		    let a = att[t];
+
+                    // all heads get concat
 		    for (let i = 0; i < head_size; i++)
-		        x_residual[i] += a * v[i];
+		        xb[i] += att[t] * v[i];
 	        }
             }
 
-            // TODO: what comes after attention?
+            // final matmul to get the output of the attention
+            vecmatmul(
+	        b.x_attn_out,
+		weights.output.subarray(
+		    layer_i * dim * dim, dim * dim
+		),
+		b.xb
+            );
+
+            // residual connection (x -> x_attn_out)
+            for (let i = 0; i < dim; i++)
+	        x[i] += b.x_attn_out[i];
+
+	    rmsnorm(
+	        b.xb,
+		x,
+		weights.rms_ffn.subarray(
+		    layer_i * dim, dim
+		)
+	    );
+
+	    // self.w2(F.silu(self.w1(x)) * self.w3(x))
+	    vecmatmul(
+	        b.hb,
+		weights.ffn1.subarray(
+		    layer_i * dim * hidden_dim,
+		    dim * hidden_dim
+		)
+                b.xb
+	    );
+	    vecmatmul(
+	        b.xb2, 
+		weights.ffn3.subarray(
+	            layer_i * dim * hidden_dim,
+		    dim * hidden_dim
+		),
+		b.xb
+	    );
+
+            for (let i = 0; i < hidden_dim; i++) {
+                // SwiGLU non-linearity
+		// silu(x)=x*σ(x)
+	        let val = b.hb[i];
+		val *= 1.0f / (1.0f + Math.exp(-val));
+
+		// elementwise multiply with w3(x)
+		val *= b.hb2[i];
+		b.hb[i] = val;
+	    }
+
+            // last matmulw2 * (silu(w1) * w3)
+            vecmatmul(
+	        b.xb,
+		weights.ffn2.subarray(
+		    layer_i * dim * hidden_dim, 
+		    hidden_dim * dim
+                ),
+		b.hb
+            );
+
+	    // residual connection
+            for (let i = 0; i < dim; i++)
+	        x[i] += b.xb[i];
 
         }
+
+	rmsnorm(x, x, weights.rms_final);
+
+        // classifier into logits
+	vecmatmul(b.logits, weights.classify, x);
+	return b.logits;
     }
 
     forward_layer() {
