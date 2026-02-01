@@ -65,6 +65,14 @@ function vecmatmul(
     }
 }
 
+function view(
+    x: Float32Array,
+    start: number,
+    size: number
+): Float32Array {
+    return x.subarray(start, start+size)
+}
+
 // ---- Inference ----
 
 interface Config {
@@ -80,12 +88,12 @@ interface Weights {
     // stores the embedding for each token
     token_embedding_table: Float32Array;
 
-    rms_att: Float32Array; // (layer, dim)
+    rms_att: Float32Array; // (n_layers, dim)
     rms_ffn: Float32Array;
 
     // multi-head attention
-    query: Float32Array; // (layer, dim, n_heads * head_size)
-    key: Float32Array;   // (layer, dim, n_kv_heads * head_size)
+    query: Float32Array; // (n_layers, dim, n_heads * head_size)
+    key: Float32Array;   // (n_layers, dim, n_kv_heads * head_size)
     value: Float32Array;
     output: Float32Array;
 
@@ -99,16 +107,13 @@ interface Weights {
 interface RuntimeBuffers {
     // current wave of activations
     x: Float32Array; // (dim,)
-    xb: Float32Array; // (dim,)
+    xb: Float32Array;
     xb2: Float32Array;
     hb: Float32Array; // (hidden_dim,)
     hb2: Float32Array;
 
     // for attention
     q: Float32Array; // (dim,)
-    // TODO: these are just pointers and need not be here
-    // k: Float32Array; // (not dim,)
-    // v: Float32Array; // (not dim,)
 
     // TODO: this
     att: Float32Array; // (n_heads, seq_len)
@@ -127,14 +132,30 @@ class Transformer {
         readonly b: RuntimeBuffers
     ) {}
 
-    static load_weights(readonly config: Config): Weights {
-        let head_size = config.dim / config.n_heads;
-        let weights: Weights = {
+    static load_weights(config: Config): Weights {
+        const dim = config.dim;
+        const head_size = dim / config.n_heads;
+        console.assert(config.n_heads * head_size == dim);
 
-             query: new Float32Array(config.dim * config.n_heads * head_size),
-             key: new Float32Array(config.dim * config.n_kv_heads * head_size),
-             value: new Float32Array(config.dim * config.n_kv_heads * head_size),
-             output: new Float32Array(),
+        let weights: Weights = {
+            token_embedding_table: new Float32Array(
+                config.vocab_size * config.dim 
+            ),
+
+            rms_att: new Float32Array(config.n_layers * dim),
+            rms_ffn: new Float32Array(config.n_layers * dim),
+    
+            query: new Float32Array(config.n_layers * dim * dim),
+            key: new Float32Array(config.n_layers * dim * config.n_kv_heads * head_size),
+            value: new Float32Array(config.n_layers * dim * config.n_kv_heads * head_size),
+            output: new Float32Array(config.n_layers * dim * dim),
+
+            ffn1: new Float32Array(config.n_layers * config.hidden_dim * dim),
+            ffn2: new Float32Array(config.n_layers * dim * config.hidden_dim),
+            ffn3: new Float32Array(config.n_layers * config.hidden_dim * dim),
+
+            rms_final: new Float32Array(dim),
+            classify: new Float32Array(dim * config.vocab_size)
         };  
   
         // TODO: load data from the checkpoint file here
@@ -142,68 +163,87 @@ class Transformer {
         return weights; 
     }
 
-    static create_buffers(readonly config: Config): RuntimeBuffers {
+    static create_buffers(config: Config): RuntimeBuffers {
         // TODO: this
         const head_size = config.dim / config.n_heads;
         const kv_dim = config.n_kv_heads * head_size;
         return {
             x: new Float32Array(config.dim),
-            xb: new Float32Arrat(config.dim),
-            x_attn_out: new Float32Arrat(config.dim),
+            xb: new Float32Array(config.dim),
+            xb2: new Float32Array(config.dim),
+            hb: new Float32Array(config.hidden_dim),
+            hb2: new Float32Array(config.hidden_dim),
              
             q: new Float32Array(config.dim),
 
+            att: new Float32Array(config.n_heads * config.seq_len),
+            // output is a one hot vector?
+            logits: new Float32Array(config.dim * config.vocab_size),
+
             key_cache: new Float32Array(
                 config.n_layers * config.seq_len * kv_dim),
-            val_cache: new Float32Array(
-                config.n_layers * config.seq_len * kv_dim),
+            value_cache: new Float32Array(
+                config.n_layers * config.seq_len * kv_dim)
         };
     }
 
-    forward(token: number, position: number) {
-        const dim = config.dim;       
-        // TODO: finish this + understanding the kv cache logic. Read into MQA, briefly
-        const head_size = dim / config.n_heads;
-        const kv_dim =  config.n_kv_heads * head_size;
+    forward(token: number, position: number): Float32Array  {
+        // size of query vector
+        const dim = this.config.dim;       
+        const hidden_dim = this.config.hidden_dim;
+        const head_size = dim / this.config.n_heads;
+        // size of key,value vectors
+        const kv_dim = this.config.n_kv_heads * head_size;
+        // ratio between num query heads and kv heads 
+        const kv_mul = Math.trunc(this.config.n_heads / this.config.n_kv_heads);
+        const seq_len = this.config.seq_len;
         
-        let x = b.x;
-        let content_row = weights
-            .token_embedding_table
-            .subarray(token * dim, dim);
-	// copy the token embedding into x
-	x.set(content_row);
+        let x = this.b.x;
+        let xb = this.b.xb;
+        let xb2 = this.b.xb2;
+        let hb = this.b.hb;
+        let hb2 = this.b.hb2;
+            
+	    x.set(view(
+            this.weights.token_embedding_table,
+            token * dim, 
+            dim
+        ));
 
         for (let layer_i = 0; layer_i < this.config.n_layers; layer_i++) {
-            // TODO: implement this!
             rmsnorm(
-                b.xb,
+                xb,
                 x,
-                weights.rms_att + layer_i * dim
+                view(this.weights.rms_att, layer_i * dim, dim)
             );
            
             // key and value point to the kv cache
-            const layer_off = layer_i * config.seq_len * kv_dim;
-            const key   = b.key_cache.subarray(layer_off + position * kv_dim, kv_dim);
-            const value = b.value_cache.subarray(layer_off + position * kv_dim, kv_dim);
+            const layer_off = layer_i * this.config.seq_len * kv_dim;
+            const query = this.b.q;
+            const key   = view(this.b.key_cache, layer_off + position * kv_dim, kv_dim);
+            const value = view(this.b.value_cache, layer_off + position * kv_dim, kv_dim);
              
             vecmatmul(
-                b.q,
-                weights.query + layer_i * dim * dim
-                b.xb);
+                query,
+                view(this.weights.query, layer_i * dim * dim, dim * dim),
+                xb
+            );
             vecmatmul(
                 key,
-                weights.key + layer_i * dim * kv_dim
-                b.xb);
+                view(this.weights.key, layer_i * dim * kv_dim, dim * kv_dim),
+                xb
+            );
             vecmatmul(
                 value,
-                weights.value + layer_i * dim * kv_dim
-                b.xb);
+                view(this.weights.value, layer_i * dim * kv_dim, dim * kv_dim),
+                xb
+            );
 
             // RoPE relative positional encoding: complex-valued rotate q and k in each head
             for (let i = 0; i < dim; i += 2) {
                 let head_dim = i % head_size;
-                let freq = 1.0f / Math.pow(10000.0f, head_dim / (float)head_size);
-                let val = pos * freq;
+                let freq = 1.0 / Math.pow(10000.0, head_dim / head_size);
+                let val = position * freq;
 
                 // how many vectors? 2 = q & k, 1 = q only
                 let rotn = (i < kv_dim ? 2 : 1);
@@ -217,129 +257,119 @@ class Transformer {
                 }
             }
 
-	    // multihead attention
-            for (let hi = 0; hi < config.n_heads; hi++) {
-	        // vecs for this head
-		let q   = b.q.subarray(hi * head_size, head_size);
-		let att = b.att.subarray(hi * config.seq_len, config.seq_len);
+            // multihead attention
+            for (let hi = 0; hi < this.config.n_heads; hi++) {
+                // vecs for curr head
+                let q   = view(this.b.q, hi * head_size, head_size);
+                let att = view(this.b.att, hi * seq_len, seq_len);
 
-		// iter all timesteps, including current
-		for (let t = 0; t <= pos; t++) {
-		    let k = b.key_cache.subarray(
-		         layer_off
-			 + t * kv_dim
-			 + Math.trunc(hi / kv_mul) * head_size,
-			 head_size);
+                for (let ti = 0; ti <= position; ti++) {
+                    let k = view(
+                        this.b.key_cache,
+                        layer_off + ti * kv_dim + Math.trunc(hi / kv_mul) * head_size,
+                        head_size
+                    );
 
                     // attention score is dot product
-		    let score = 0.0f;
-		    for (let i = 0; i < head_size; i++)
+                    let score = 0.0;
+                    for (let i = 0; i < head_size; i++) {
                         score += q[i] * k[i];
-
-	            att[t] = score / Math.sqrt(head_size);
-	        }
+                        att[ti] = score / Math.sqrt(head_size);
+                    }
+                }
 
                 // softmax scores to get attention weights
-                softmax(att.subarray(0, pos + 1));
-   
+                softmax(view(att, 0, position + 1));
+    
                 // weighted sum of the values, store back into x
-	        let xb = b.xb.subarray(h * head_size, head_size);
-		xb.fill(0, 0, head_size);
-	       
-	        for (let t = 0; t <= pos; t++) {
-	            // get value vec for this head and timestep
-                    let v = b.value_cache.subarray(
-		        layer_off
-		        + t * kv_dim
-		        + (h / kv_mul) * head_size,
-		        head_size
-		    );
+                let xb = view(this.b.xb, hi * head_size, head_size);
+                xb.fill(0, 0, head_size);
+                for (let t = 0; t <= position; t++) {
+                    // get value vec for this head and timestep
+                    let v = view(
+                        this.b.value_cache,
+                        layer_off + t * kv_dim + (hi / kv_mul) * head_size,
+                        head_size
+                    );
 
-		    // accumulate the weighted values
-		    // from each ts with its respective
-		    // attention score.
+                    // accumulate the weighted values
+                    // from each ts with its respective
+                    // attention score.
 
-                    // all heads get concat
-		    for (let i = 0; i < head_size; i++)
-		        xb[i] += att[t] * v[i];
-	        }
+                    // separate heads get concatenated
+                    for (let i = 0; i < head_size; i++)
+                        xb[i] += att[t] * v[i];
+                }
             }
 
             // final matmul to get the output of the attention
             vecmatmul(
-	        b.x_attn_out,
-		weights.output.subarray(
-		    layer_i * dim * dim, dim * dim
-		),
-		b.xb
+                xb2,
+                view(this.weights.output, layer_i * dim * dim, dim * dim),
+                xb
             );
 
-            // residual connection (x -> x_attn_out)
+            // residual connection
             for (let i = 0; i < dim; i++)
-	        x[i] += b.x_attn_out[i];
+                x[i] += xb2[i];
 
-	    rmsnorm(
-	        b.xb,
-		x,
-		weights.rms_ffn.subarray(
-		    layer_i * dim, dim
-		)
-	    );
+            rmsnorm(
+                xb,
+                x,
+                view(this.weights.rms_ffn, layer_i * dim, dim)
+            );
 
-	    // self.w2(F.silu(self.w1(x)) * self.w3(x))
-	    vecmatmul(
-	        b.hb,
-		weights.ffn1.subarray(
-		    layer_i * dim * hidden_dim,
-		    dim * hidden_dim
-		)
-                b.xb
-	    );
-	    vecmatmul(
-	        b.xb2, 
-		weights.ffn3.subarray(
-	            layer_i * dim * hidden_dim,
-		    dim * hidden_dim
-		),
-		b.xb
-	    );
+            // w2 @ (silu(w1 @ x) * (w3 @ x))
+            vecmatmul(
+                hb,
+                view(
+                    this.weights.ffn1,
+                    layer_i * dim * hidden_dim,
+                    dim * hidden_dim
+                ),
+                xb
+            );
+            vecmatmul(
+                xb2,
+                view(
+                    this.weights.ffn3,
+                    layer_i * dim * hidden_dim,
+                    dim * hidden_dim
+                ),
+                xb
+            );
 
             for (let i = 0; i < hidden_dim; i++) {
-                // SwiGLU non-linearity
-		// silu(x)=x*σ(x)
-	        let val = b.hb[i];
-		val *= 1.0f / (1.0f + Math.exp(-val));
+                // silu(x) = x*σ(x) // SwiGLU
+                let val = hb[i];
+                val *= 1.0 / (1.0 + Math.exp(-val));
 
-		// elementwise multiply with w3(x)
-		val *= b.hb2[i];
-		b.hb[i] = val;
-	    }
+                // elementwise multiply with w3(x)
+                val *= hb2[i];
+                hb[i] = val;
+            }
 
-            // last matmulw2 * (silu(w1) * w3)
+            // last matmul: w2 @ ...
             vecmatmul(
-	        b.xb,
-		weights.ffn2.subarray(
-		    layer_i * dim * hidden_dim, 
-		    hidden_dim * dim
+                xb,
+                view(
+                    this.weights.ffn2,
+                    layer_i * dim * hidden_dim, 
+                    hidden_dim * dim
                 ),
-		b.hb
+                hb
             );
 
-	    // residual connection
+            // residual connection
             for (let i = 0; i < dim; i++)
-	        x[i] += b.xb[i];
-
+                x[i] += xb[i];
         }
 
-	rmsnorm(x, x, weights.rms_final);
+        rmsnorm(x, x, this.weights.rms_final);
 
         // classifier into logits
-	vecmatmul(b.logits, weights.classify, x);
-	return b.logits;
-    }
-
-    forward_layer() {
-
+        vecmatmul(this.b.logits, this.weights.classify, x);
+        return this.b.logits;
     }
 }
 
