@@ -1,2 +1,11 @@
 venv
 llama2
+models
+
+# bin
+dist
+
+# we're not distributing a lib
+.pnp.cjs
+.yarn
+yarn.lock

@@ -6,6 +6,7 @@
 
 ## how to download weights
 - go to meta website, the dropdown has llama2. You'll have to run their script download.sh, passing in the URL you were provided.
+- Oh, there are some weaker weights at https://huggingface.co/karpathy/tinyllamas/resolve/main/stories15M.bin
 
 ## todo
 - where are llama2's weights?
@@ -17,4 +18,4 @@
   - https://github.com/meta-llama/llama/blob/main/llama/model.py
 - how are tokens tokenized / de-tokenized?
   - https://github.com/meta-llama/llama/blob/main/llama/tokenizer.py
-  - 
+- How to get llama2 7B to work with our arch?

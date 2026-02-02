@@ -1,4 +1,4 @@
-import * as fs from 'fs';
+import fs from 'fs';
 
 class Tokenizer {
     constructor() {
@@ -6,10 +6,10 @@ class Tokenizer {
     }
     encode(text: string): number[] {
         // TODO: return tokens using BPE
-        return [];
+        throw "NOT YET IMPLEMENTED";
     }
     decode(token: number): string {
-        return null;
+        throw "NOT YET IMPLEMENTED";
     }
 }
 
@@ -24,7 +24,7 @@ function rmsnorm(
     for (const xi of x)
         ss += xi * xi;
     ss /= x.length;
-    ss += 1e-5f; // avoid LARGE ss after 1/x
+    ss += 1e-5; // avoid LARGE ss after 1/x
 
     ss = 1.0 / Math.sqrt(ss);
     for (let i = 0; i < out.length; i++)
@@ -39,7 +39,7 @@ function softmax(x: Float32Array) {
         }
     }
 
-    let sum = 0.0f;
+    let sum = 0.0;
     for (let i = 0; i < x.length; i++) {
         x[i] = Math.fround(Math.exp(x[i] - max_val));
         sum += x[i];
@@ -82,9 +82,9 @@ interface Config {
     n_kv_heads: number;
     vocab_size: number;
     seq_len: number;
+
+    shared_weights: boolean;
 }
-const CONFIG_NUM_ELEMENTS = 7;
-const CONFIG_NUM_BYTES = CONFIG_NUM_ELEMENTS * 4;
 interface Weights {
     // stores the embedding for each token
     token_embedding_table: Float32Array; // ()
@@ -129,26 +129,32 @@ class FileLoader {
     readonly f: number;
 
     constructor (checkpoint_path: string) {
-        this.f = fs.openSync(checkpoint_path, "rb");
+        this.f = fs.openSync(checkpoint_path, "r");
         if (this.f == null)
             throw "ERROR: bad checkpoint path"
     }
 
     load_config(): Config {
+        const CONFIG_NUM_ELEMENTS = 7;
+        const CONFIG_NUM_BYTES = CONFIG_NUM_ELEMENTS * 4;
+
         const data = new Uint8Array(CONFIG_NUM_BYTES);
         const bytesRead = fs.readSync(this.f, data, 0, CONFIG_NUM_BYTES, 0);
         if (bytesRead != CONFIG_NUM_BYTES)
             throw "ERROR: failed to read config"
 
         const view = new DataView(data.buffer);
+        const vocab_size = view.getInt32(5 * 4, true);
         let config: Config = {
-            dim: view.getInt32(0, true),
-            hidden_dim: view.getInt32(1, true),
-            n_layers: view.getInt32(2, true),
-            n_heads: view.getInt32(3, true),
-            n_kv_heads: view.getInt32(4, true),
-            vocab_size: view.getInt32(5, true),
-            seq_len: view.getInt32(6, true),
+            dim:        view.getInt32(0 * 4, true),
+            hidden_dim: view.getInt32(1 * 4, true),
+            n_layers:   view.getInt32(2 * 4, true),
+            n_heads:    view.getInt32(3 * 4, true),
+            n_kv_heads: view.getInt32(4 * 4, true),
+            vocab_size: Math.abs(vocab_size),
+            seq_len:    view.getInt32(6 * 4, true),
+
+            shared_weights: vocab_size > 0,
         };
         return config;
     }
@@ -429,9 +435,10 @@ function generate_response(prompt: string): string {
     // TODO: tokenize prompt
     const tokenizer = new Tokenizer();
 
-    const fileLoader = new FileLoader("llama-2-7b-chat/consolidated.00.pth");
+    //const fileLoader = new FileLoader("llama2/llama-2-7b-chat/params.json");
+    const fileLoader = new FileLoader("models/stories15M.bin");
     const config = fileLoader.load_config();
-    console.log(`config = ${config}`);
+    console.log(`config = ${JSON.stringify(config, null, 2)}`);
 
     const transformer = new Transformer(
         config,
@@ -444,12 +451,13 @@ function generate_response(prompt: string): string {
     return "NOT YET IMPLEMENTED";
 }
 
-const readline = require("readline");
+import readline from 'readline';
+
 const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
 });
-rl.question("Prompt:", (prompt: string) => {
+rl.question("Prompt: ", (prompt: string) => {
     console.log(`Response: ${generate_response(prompt)}!`);
     rl.close();
 });
