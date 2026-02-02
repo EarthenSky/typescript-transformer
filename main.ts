@@ -1,15 +1,50 @@
 import fs from 'fs';
 
 class Tokenizer {
-    constructor() {
-        
+    vocab: string[];
+    vocab_scores: float[];
+    max_token_length: number;
+
+    constructor(path: string, readonly vocab_size: number) {
+        this.vocab = new Array(vocab_size);
+	this.vocab_scores = new Float32Array(vocab_size);
+        // sorted vocab
+
+	// byte pieces
+
+	// TODO: load from file
+    }
+    static compare(a:TokenIndex, b:TokenIndex): number {
+        throw "not yet impl"
     }
     encode(text: string): number[] {
+
         // TODO: return tokens using BPE
+
         throw "NOT YET IMPLEMENTED";
     }
-    decode(token: number): string {
-        throw "NOT YET IMPLEMENTED";
+    decoode(prev_token: number, token: number): string {
+        let i = 0;
+        let piece: string = this.vocab[token];
+
+        // following BOS (1) token, sentencepiece decoder strips any leading whitespace (see PR #89)
+	if (prev_token == 1 && piece[0] == ' ') {
+	    i += 1;
+	}
+
+	// careful, some tokens designate raw bytes, and look like e.g. '<0x01>'
+	// parse this and convert and return the actual byte
+
+	// TODO: what's going on here? & how to replicate in ts
+	let byte_val: char;
+	if (sscanf(
+	    piece.subarray(i),
+	    "<0x%02hhX>",
+	    &byte_val
+	) == 1)
+	    piece = (char*)t->byte_pieces + byte_val * 2;
+
+        return piece;
     }
 }
 
