@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 
 class Tokenizer {
     constructor() {
@@ -19,15 +20,15 @@ function rmsnorm(
     x: Float32Array,
     weight: Float32Array
 ) {
-    let ss = 0.0f;
-    for (const xi of x) { ss += xi*xi; }
+    let ss = 0.0;
+    for (const xi of x)
+        ss += xi * xi;
     ss /= x.length;
     ss += 1e-5f; // avoid LARGE ss after 1/x
 
-    ss = 1.0 / sqrt(ss);
-    for (let i = 0; i < out.length; i++) {
+    ss = 1.0 / Math.sqrt(ss);
+    for (let i = 0; i < out.length; i++)
         out[i] = weight[i] * ss * x[i];
-    }
 }
 
 function softmax(x: Float32Array) {
@@ -44,9 +45,8 @@ function softmax(x: Float32Array) {
         sum += x[i];
     }
 
-    for (let i = 0; i < x.length; i++) {
+    for (let i = 0; i < x.length; i++)
         x[i] /= sum;
-    }
 }
 
 function vecmatmul(
@@ -57,10 +57,9 @@ function vecmatmul(
     const n = x.length;
     const m = out.length;
     for (let i = 0; i < m; i++) {
-        let val = 0.0f;
-        for (let j = 0; j < n; j++) {
+        let val = 0.0;
+        for (let j = 0; j < n; j++)
             val += x[j] * M[i * n + j];
-        }
         out[i] = val;
     }
 }
@@ -70,7 +69,7 @@ function view(
     start: number,
     size: number
 ): Float32Array {
-    return x.subarray(start, start+size)
+    return x.subarray(start, start+size);
 }
 
 // ---- Inference ----
@@ -84,9 +83,11 @@ interface Config {
     vocab_size: number;
     seq_len: number;
 }
+const CONFIG_NUM_ELEMENTS = 7;
+const CONFIG_NUM_BYTES = CONFIG_NUM_ELEMENTS * 4;
 interface Weights {
     // stores the embedding for each token
-    token_embedding_table: Float32Array;
+    token_embedding_table: Float32Array; // ()
 
     rms_att: Float32Array; // (n_layers, dim)
     rms_ffn: Float32Array;
@@ -124,15 +125,35 @@ interface RuntimeBuffers {
     value_cache: Float32Array;
 };
 
-class Transformer {
-    constructor(
-        readonly config: Config,
-        readonly weights: Weights,
-        // TODO: initialize these
-        readonly b: RuntimeBuffers
-    ) {}
+class FileLoader {
+    readonly f: number;
 
-    static load_weights(config: Config): Weights {
+    constructor (checkpoint_path: string) {
+        this.f = fs.openSync(checkpoint_path, "rb");
+        if (this.f == null)
+            throw "ERROR: bad checkpoint path"
+    }
+
+    load_config(): Config {
+        const data = new Uint8Array(CONFIG_NUM_BYTES);
+        const bytesRead = fs.readSync(this.f, data, 0, CONFIG_NUM_BYTES, 0);
+        if (bytesRead != CONFIG_NUM_BYTES)
+            throw "ERROR: failed to read config"
+
+        const view = new DataView(data.buffer);
+        let config: Config = {
+            dim: view.getInt32(0, true),
+            hidden_dim: view.getInt32(1, true),
+            n_layers: view.getInt32(2, true),
+            n_heads: view.getInt32(3, true),
+            n_kv_heads: view.getInt32(4, true),
+            vocab_size: view.getInt32(5, true),
+            seq_len: view.getInt32(6, true),
+        };
+        return config;
+    }
+
+    load_weights(config: Config): Weights {
         const dim = config.dim;
         const head_size = dim / config.n_heads;
         console.assert(config.n_heads * head_size == dim);
@@ -158,16 +179,44 @@ class Transformer {
             classify: new Float32Array(dim * config.vocab_size)
         };  
   
-        // TODO: load data from the checkpoint file here
+        let readIntoBuffer = (
+            buff: Float32Array, position: number
+        ) => {
+            return fs.readSync(this.f, buff, 0, buff.length, position);
+        }
+        
+        let position = 0;
+        position += readIntoBuffer(weights.token_embedding_table, position);
+        position += readIntoBuffer(weights.rms_att, position);
+        position += readIntoBuffer(weights.rms_ffn, position);
+
+        position += readIntoBuffer(weights.query, position);
+        position += readIntoBuffer(weights.key, position);
+        position += readIntoBuffer(weights.value, position);
+        position += readIntoBuffer(weights.output, position);
+
+        position += readIntoBuffer(weights.ffn1, position);
+        position += readIntoBuffer(weights.ffn2, position);
+        position += readIntoBuffer(weights.ffn3, position);
+    
+        position += readIntoBuffer(weights.rms_final, position);
+        position += readIntoBuffer(weights.classify, position);
 
         return weights; 
     }
+}
+
+class Transformer {
+    constructor(
+        readonly config: Config,
+        readonly weights: Weights,
+        readonly b: RuntimeBuffers
+    ) {}
 
     static create_buffers(config: Config): RuntimeBuffers {
-        // TODO: this
         const head_size = config.dim / config.n_heads;
         const kv_dim = config.n_kv_heads * head_size;
-        return {
+        let buffers: RuntimeBuffers = {
             x: new Float32Array(config.dim),
             xb: new Float32Array(config.dim),
             xb2: new Float32Array(config.dim),
@@ -177,14 +226,17 @@ class Transformer {
             q: new Float32Array(config.dim),
 
             att: new Float32Array(config.n_heads * config.seq_len),
-            // output is a one hot vector?
             logits: new Float32Array(config.dim * config.vocab_size),
 
             key_cache: new Float32Array(
-                config.n_layers * config.seq_len * kv_dim),
+                config.n_layers * config.seq_len * kv_dim
+            ),
             value_cache: new Float32Array(
-                config.n_layers * config.seq_len * kv_dim)
+                config.n_layers * config.seq_len * kv_dim
+            )
         };
+
+        return buffers;
     }
 
     forward(token: number, position: number): Float32Array  {
@@ -373,25 +425,23 @@ class Transformer {
     }
 }
 
-function read_checkpoint(checkpoint_path:string): [Config, Weights] {
-    // TODO: this
-    // read config
-    // create an instance of TransformerWeights (or we can just allocate it into a single memory block & simulate pointers, since it's all f32)
-    return [null, null];
-}
-
 function generate_response(prompt: string): string {
+    // TODO: tokenize prompt
     const tokenizer = new Tokenizer();
 
-    // TODO: tokenize prompt
+    const fileLoader = new FileLoader("llama-2-7b-chat/consolidated.00.pth");
+    const config = fileLoader.load_config();
+    console.log(`config = ${config}`);
 
-    const transformer = new Transformer(...read_checkpoint("llama-2-7b-chat/consolidated.00.pth"));
+    const transformer = new Transformer(
+        config,
+        fileLoader.load_weights(config),
+        Transformer.create_buffers(config)
+    );
     
-    // transformer.forward();
-
     // TODO: read through how the temperature thing works & figure out how to generate a response
 
-    return null;
+    return "NOT YET IMPLEMENTED";
 }
 
 const readline = require("readline");

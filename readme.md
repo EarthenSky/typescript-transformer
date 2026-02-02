@@ -1,3 +1,9 @@
+# typescript transformer
+
+## setup
+- node 24.13 w/ yarn -> https://nodejs.org/en/download
+- 
+
 ## how to download weights
 - go to meta website, the dropdown has llama2. You'll have to run their script download.sh, passing in the URL you were provided.
 
