@@ -5,46 +5,71 @@ class Tokenizer {
     vocab_scores: float[];
     max_token_length: number;
 
-    constructor(path: string, readonly vocab_size: number) {
+    constructor(
+        path: string, readonly vocab_size: number
+    ) {
         this.vocab = new Array(vocab_size);
 	this.vocab_scores = new Float32Array(vocab_size);
         // sorted vocab
 
-	// byte pieces
-
+        this.byte_pieces = [];
+	for (int i = 0; i < 256; i++)
+	    this.byte_pieces.push(String.fromCharCode(i));
+	
 	// TODO: load from file
     }
     static compare(a:TokenIndex, b:TokenIndex): number {
         throw "not yet impl"
     }
-    encode(text: string): number[] {
+    encode(
+        text: string, bos: number, eos: number
+    ): number[] {
+        if (text == "") throw "text cannot be empty";
+
+	if (this.sorted_vocab.length == 0) {
+	    // lazily alloc and sort the vocabulary
+	    for (let i = 0; i < this.vocab_size; i++) {
+	        this.sorted_vocab[i] = {
+                    str: this.vocab[i],
+		    id: i,
+		};
+            }
+
+	    this.sorted_vocab.sort(
+	        Tokenizer.compare_tokens);
+	}
+
+        // create a temporary buffer that will store merge candidates of always two consecutive tokens
+        // *2 for concat, +1 for null terminator +2 for UTF8 (in case max_token_length is 1)
+        char* str_buffer = malloc((t->max_token_length*2 +1 +2) * sizeof(char));
+	let str_len = 0;
+
+	        // start at 0 tokens
+		    *n_tokens = 0;
+
+		        // add optional BOS (=1) token, if desired
+			    if (bos) tokens[(*n_tokens)++] = 1;
 
         // TODO: return tokens using BPE
 
         throw "NOT YET IMPLEMENTED";
     }
     decoode(prev_token: number, token: number): string {
-        let i = 0;
         let piece: string = this.vocab[token];
 
         // following BOS (1) token, sentencepiece decoder strips any leading whitespace (see PR #89)
 	if (prev_token == 1 && piece[0] == ' ') {
-	    i += 1;
+	    piece = piece.subarray(1)(
 	}
 
 	// careful, some tokens designate raw bytes, and look like e.g. '<0x01>'
 	// parse this and convert and return the actual byte
-
-	// TODO: what's going on here? & how to replicate in ts
-	let byte_val: char;
-	if (sscanf(
-	    piece.subarray(i),
-	    "<0x%02hhX>",
-	    &byte_val
-	) == 1)
-	    piece = (char*)t->byte_pieces + byte_val * 2;
-
-        return piece;
+	let m = piece.match("<0x\d+>");
+	if (m) {
+            return this.byte_pieces[Number(m[0])];
+	} else {
+            return piece;
+	}
     }
 }
 
