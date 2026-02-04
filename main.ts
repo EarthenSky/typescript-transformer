@@ -10,7 +10,7 @@ class Tokenizer {
     ) {
         this.vocab = new Array(vocab_size);
 	this.vocab_scores = new Float32Array(vocab_size);
-        // sorted vocab
+        this.sorted_vocab = [];
 
         this.byte_pieces = [];
 	for (int i = 0; i < 256; i++)
@@ -21,7 +21,15 @@ class Tokenizer {
     static compare(a:TokenIndex, b:TokenIndex): number {
         throw "not yet impl"
     }
+    // find the perfect match for str in vocab, return its index or -1 if not found
+    str_lookup(str:string): number {
+        // TODO(gabe): refactor sorted vocab into vocab?
+        // TODO(gabe): impl bsearch for this list
+	let t = this.sorted_vocab.find(x => x.str == str);
+        return res == null ? -1 : t.id;
+    }
     encode(
+        // todo: ensure text is ascii, despite being u16
         text: string, bos: number, eos: number
     ): number[] {
         if (text == "") throw "text cannot be empty";
@@ -39,20 +47,69 @@ class Tokenizer {
 	        Tokenizer.compare_tokens);
 	}
 
-        // create a temporary buffer that will store merge candidates of always two consecutive tokens
-        // *2 for concat, +1 for null terminator +2 for UTF8 (in case max_token_length is 1)
-        char* str_buffer = malloc((t->max_token_length*2 +1 +2) * sizeof(char));
-	let str_len = 0;
+        // temporary buffer to store merge candidates of two consecutive tokens
+        let buffer = [];
+        let tokens = [];
 
-	        // start at 0 tokens
-		    *n_tokens = 0;
+	// add optional BOS (=1) token, if desired
+	if (bos) tokens.push(1);
 
-		        // add optional BOS (=1) token, if desired
-			    if (bos) tokens[(*n_tokens)++] = 1;
+        // add_dummy_prefix is true by default
+        // so prepend a dummy prefix token to the input string, but only if text != ""
+        // TODO: pretty sure this isn't correct in the general case but I don't have the
+	// energy to read more of the sentencepiece code to figure out what it's doing
+	// TODO(gabe): what is he talking about?
+	if (text.length > 0) {
+	    let dummy_prefix = this.str_lookup(" ");
+	    tokens.push(dummy_prefix);
+	}
 
-        // TODO: return tokens using BPE
+	// Okay UTF-8 time. This will get messy. Here is the reference from Wikipedia:
+	// Code point ↔ UTF-8 conversion
+	// First code point	Last code point	Byte 1	Byte 2	Byte 3	Byte 4
+	// U+0000	U+007F	    0xxxxxxx
+	// U+0080	U+07FF	    110xxxxx	10xxxxxx
+	// U+0800	U+FFFF	    1110xxxx	10xxxxxx	10xxxxxx
+	// U+10000	U+10FFFF    11110xxx	10xxxxxx	10xxxxxx	10xxxxxx
 
-        throw "NOT YET IMPLEMENTED";
+        // process the raw (UTF-8) byte sequence of the input string
+        for (let ci = 0; c < text.length; ci++) {
+            // reset buffer if the current byte is ASCII or a leading byte
+	    // in UTF-8, all continuation bytes start with "10" in first two bits
+	    if ((text.charCodeAt(ci) & 0xC0) != 0x80) {
+	        // this byte must be either a leading byte (11...) or an ASCII char (0x...)
+		buffer = [];
+	    }
+
+	    buffer.push(text[ci]);
+
+	    // while the next character is a continuation byte, continue appending
+	    // but if there are too many of them, just stop to avoid overruning str_buffer size.
+
+	    if (
+	        (text.getCharCodeAt(ci+1)&0xC0) == 0x80
+		&& buffer.length < 4
+	    )
+	        continue;
+
+	    // ci+1 is not a continuation byte, so we've read in a full codepoint
+	    let id = this.str_lookup(buffer);
+	    if (id != -1) {
+		this.tokens.push(id);
+	    } else {
+	        // byte_fallback encoding: just encode each byte as a token
+		// +3 is here because the first 3 vocab elements are <unk>, <s>, </s>
+		// so individual bytes only start at 3
+		for (let c of buffer)
+		    tokens.push(c + 3);
+	    }
+
+	    buffer = [];
+	}
+
+        // TODO: wait we're not done yet!!
+ 
+        return tokens;
     }
     decoode(prev_token: number, token: number): string {
         let piece: string = this.vocab[token];
