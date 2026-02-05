@@ -1,32 +1,38 @@
 import fs from 'fs';
 
-function bsearch<T>(xs: T[], t: T): T | null {
+
+// U must be comparable
+function bsearch<T, U>(xs: T[], t: U, f: (x:T) => U): T | null {
     let topi = xs.length - 1;
     let boti = 0;
 
-    while (topi != boti) {
+    while ((topi - boti) <= 4) {
         let m = Math.trunc((topi + boti)/2);
-        let x = xs[m];
-        if (t > x) { bot = m; }
-	else { top = m; }
-    
-    if (xs[topi] != ) return ;
+        if (t > f(xs[m])) boti = m;
+	else topi = m;
+   
+    // we do a small stride at the end for perf
+    // (also to avoid worrying about rounding issues)
+    for (let i = boti; i <= topi; i++)
+        if (xs[i] == t)
+            return i;
 
-    return topi;;
+    return null;
 }
 
 interface TokenIndex {
-   str: string,
+   str: number[],
    id: number,
 };
 
 class Tokenizer {
-    vocab: string[];
+    // TODO: how to do array of array?
+    vocab: number[][];
     vocab_scores: Float32Array;
     max_token_length: number;
 
     sorted_vocab: TokenIndex[];
-    byte_pieces: string[];
+    byte_pieces: number[];
 
     constructor(
         tokenizer_path: string, readonly vocab_size: number
@@ -56,7 +62,7 @@ class Tokenizer {
         for (let i = 0; i < vocab_size; i++) {
             const ENTRY_HDR_SIZE = 4 + 4;
             const data = new Uint8Array(ENTRY_HDR_SIZE);
-            let bytes_read = fs.readSync(f, data, 0, ENTRY_HDR_SIZE, pos);
+            let bytes_read = fs.readSync(f, data, 0, ENTRY_HDR_SIZE, position);
             if (bytes_read != ENTRY_HDR_SIZE)
                 throw "ERROR";
             position += bytes_read;
@@ -70,21 +76,21 @@ class Tokenizer {
             if (bytes_read != len)
                 throw "ERROR";
 
-            this.vocab[i] = vocab_data.buffer.toString("utf8", 0, len);
+            for (let j = 0; j < len; j++)
+	        this.vocab[i].push(vocab_data[j]);
+
             position += bytes_read;
         }
     }
-    static compare_tokens(a:TokenIndex, b:TokenIndex): number {
+    // TODO: implement this & fix the sorting of vocab
+    static compare_raw_str(a:number[], b:number[]): number {
         if (a.str == b.str) return 0;
         else if (a.str < b.str) return -1;
         else return 1;
     }
     // find the perfect match for str in vocab, return its index or -1 if not found
-    str_lookup(str:string): number {
-        // TODO(gabe): refactor sorted vocab into vocab?
-        // TODO(gabe): impl bsearch for this list
-        let t = this.sorted_vocab.find(x => x.str == str);
-        let t = bsearch(this.sorted_vocab, x => x.str);
+    str_lookup(str:number[]): number {
+        let t = bsearch(this.sorted_vocab, str, x => x.str, Tokenizer.compare_raw_str);
         return res == null ? -1 : t.id;
     }
     encode(
@@ -113,7 +119,6 @@ class Tokenizer {
         // optional BOS (=1) (<s>) token
         if (bos) tokens.push(1);
 
-        // add_dummy_prefix is true by default
         // so prepend a dummy prefix token to the input string, but only if text != ""
         // TODO: pretty sure this isn't correct in the general case but I don't have the
         // energy to read more of the sentencepiece code to figure out what it's doing
@@ -131,7 +136,7 @@ class Tokenizer {
                 // this must be a leading byte (11...) or an ASCII char (0x...)
                 buffer = [];
 
-            buffer.push(text[ci]);
+            buffer.push(text.charCodeAt(ci));
 
             // while the next character is a continuation byte, continue appending
             // but if there are too many of them, just stop (> 4 is invalid anyways)
@@ -150,8 +155,8 @@ class Tokenizer {
             } else {
                 // byte_fallback encoding: just encode each byte as a token
                 // +3 is here because the first 3 vocab elements are <unk>, <s>, </s>
-                for (let ch of buffer)
-                    tokens.push(ch + 3);
+                for (let byte of buffer)
+                    tokens.push(byte + 3);
             }
 
             buffer = [];
@@ -625,6 +630,68 @@ class Transformer {
         // classifier into logits
         vecmatmul(this.b.logits, this.weights.classify, x);
         return this.b.logits;
+    }
+}
+
+interface ProbIndex {
+    prob: number;
+    index: number;
+}
+
+class Sampler {
+    prob_index: ProbIndex[];
+
+    constructor(
+        readonly vocab_size: number,
+	readonly temperature: number,
+	readonly topp: number,
+	readonly rng_seed: number
+    ) {
+        this.prob_index = [];
+    }
+
+    function sample_argmax(probs: Float32Array): number {
+        let max_i = 0;
+	let max_p = probs[0];
+
+	for (let i = 0; i < probs.length; i++) {
+	    if (probs[i] > max_p) {
+	        max_i = i;
+		max_p = probs[i];
+	    }
+	}
+
+	return max_i;
+    }
+
+    // TODO: this func
+    function sample(logits: Float32Array): number {
+        // sample the token given the logits and some hyperparameters
+	let next;
+	if (this.temperature == 0.0) {
+	    // greedy argmax sampling: take the token with the highest probability
+	    next = sample_argmax(logits);
+	} else {
+	    // apply the temperature to the logits
+	    for (let q=0; q<sampler->vocab_size; q++)
+	        logits[q] /= this.temperature;
+
+	    // apply softmax to the logits to get the probabilities for next token
+	    softmax(logits, sampler->vocab_size);
+
+	    // flip a (float) coin (this is our source of entropy for sampling)
+	    let coin = random_f32(&sampler->rng_state);
+
+	    // we sample from this distribution to get the next token
+	    if (sampler->topp <= 0 || sampler->topp >= 1) {
+	        // simply sample from the predicted probability distribution
+		next = sample_mult(logits, sampler->vocab_size, coin);
+            } else {
+	        // top-p (nucleus) sampling, clamping the least likely tokens to zero
+		next = sample_topp(logits, sampler->vocab_size, sampler->topp, sampler->probindex, coin);
+	    }
+	}
+	return next;
     }
 }
 
