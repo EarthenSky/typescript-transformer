@@ -1,12 +1,32 @@
 import fs from 'fs';
 
+function bsearch<T>(xs: T[], t: T): T | null {
+    let topi = xs.length - 1;
+    let boti = 0;
+
+    while (topi != boti) {
+        let m = Math.trunc((topi + boti)/2);
+        let x = xs[m];
+        if (t > x) { bot = m; }
+	else { top = m; }
+    
+    if (xs[topi] != ) return ;
+
+    return topi;;
+}
+
+interface TokenIndex {
+   str: string,
+   id: number,
+};
+
 class Tokenizer {
     vocab: string[];
     vocab_scores: float[];
     max_token_length: number;
 
     constructor(
-        path: string, readonly vocab_size: number
+        tokenizer_path: string, readonly vocab_size: number
     ) {
         this.vocab = new Array(vocab_size);
 	this.vocab_scores = new Float32Array(vocab_size);
@@ -16,21 +36,57 @@ class Tokenizer {
 	for (int i = 0; i < 256; i++)
 	    this.byte_pieces.push(String.fromCharCode(i));
 	
-	// TODO: load from file
+	let f = fs.openSync(tokenizer_path, "r");
+	if (f == null)
+	    throw "ERROR: bad checkpoint path";
+
+        const HDR_SIZE = 4;
+        const data = new Uint8Array(HDR_SIZE);
+	const bytesRead = fs.readSync(f, data, 0, HDR_SIZE, 0);
+	if (bytesRead != HDR_SIZE)
+	    throw "ERROR: failed to read config";
+
+	const view = new DataView(data.buffer);
+	this.maxTokenLength = view.getInt32(0 * 4, true);
+
+        let position = HDR_SIZE;
+        for (let i = 0; i < vocab_size; i++) {
+            const ENTRY_HDR_SIZE = 4 + 4;
+            const data = new Uint8Array(ENTRY_HDR_SIZE);
+            let bytes_read = fs.readSync(f, data, 0, ENTRY_HDR_SIZE, pos);
+            if (bytes_read != ENTRY_HDR_SIZE)
+	        throw "ERROR";
+	    position += bytes_read;
+	
+	    const view = new DataView(data.buffer);
+	    this.vocab_scores[i] = view.getFloat32(0 * 4, true); 
+	    let len = view.getInt32(1 * 4, true);
+
+	    const vocab_data = new Uint8Array(len);
+	    bytes_read = fs.readSync(f, vocab_data, len, 1, position);
+	    if (bytes_read != len)
+	        throw "ERROR";
+
+	    this.vocab[i] = vocab_data.buffer.toString("utf8", 0, len);
+	    position += bytes_read;
+        }
     }
-    static compare(a:TokenIndex, b:TokenIndex): number {
-        throw "not yet impl"
+    static compare_tokens(a:TokenIndex, b:TokenIndex): number {
+        if (a.str == b.str) return 0;
+	else if (a.str < b.str) return -1;
+	else return 1;
     }
     // find the perfect match for str in vocab, return its index or -1 if not found
     str_lookup(str:string): number {
         // TODO(gabe): refactor sorted vocab into vocab?
         // TODO(gabe): impl bsearch for this list
 	let t = this.sorted_vocab.find(x => x.str == str);
+	let t = bsearch(this.sorted_vocab, x => x.str)
         return res == null ? -1 : t.id;
     }
     encode(
         // todo: ensure text is ascii, despite being u16
-        text: string, bos: number, eos: number
+        text: string, bos: boolean, eos: boolean
     ): number[] {
         if (text == "") throw "text cannot be empty";
 
@@ -47,11 +103,11 @@ class Tokenizer {
 	        Tokenizer.compare_tokens);
 	}
 
-        // temporary buffer to store merge candidates of two consecutive tokens
+        // merge candidate buffer
         let buffer = [];
         let tokens = [];
 
-	// add optional BOS (=1) token, if desired
+	// optional BOS (=1) (<s>) token
 	if (bos) tokens.push(1);
 
         // add_dummy_prefix is true by default
@@ -64,28 +120,18 @@ class Tokenizer {
 	    tokens.push(dummy_prefix);
 	}
 
-	// Okay UTF-8 time. This will get messy. Here is the reference from Wikipedia:
-	// Code point ↔ UTF-8 conversion
-	// First code point	Last code point	Byte 1	Byte 2	Byte 3	Byte 4
-	// U+0000	U+007F	    0xxxxxxx
-	// U+0080	U+07FF	    110xxxxx	10xxxxxx
-	// U+0800	U+FFFF	    1110xxxx	10xxxxxx	10xxxxxx
-	// U+10000	U+10FFFF    11110xxx	10xxxxxx	10xxxxxx	10xxxxxx
-
         // process the raw (UTF-8) byte sequence of the input string
         for (let ci = 0; c < text.length; ci++) {
             // reset buffer if the current byte is ASCII or a leading byte
 	    // in UTF-8, all continuation bytes start with "10" in first two bits
-	    if ((text.charCodeAt(ci) & 0xC0) != 0x80) {
-	        // this byte must be either a leading byte (11...) or an ASCII char (0x...)
+	    if ((text.charCodeAt(ci) & 0xC0) != 0x80)
+	        // this must be a leading byte (11...) or an ASCII char (0x...)
 		buffer = [];
-	    }
 
 	    buffer.push(text[ci]);
 
 	    // while the next character is a continuation byte, continue appending
-	    // but if there are too many of them, just stop to avoid overruning str_buffer size.
-
+	    // but if there are too many of them, just stop (> 4 is invalid anyways)
 	    if (
 	        (text.getCharCodeAt(ci+1)&0xC0) == 0x80
 		&& buffer.length < 4
@@ -99,7 +145,6 @@ class Tokenizer {
 	    } else {
 	        // byte_fallback encoding: just encode each byte as a token
 		// +3 is here because the first 3 vocab elements are <unk>, <s>, </s>
-		// so individual bytes only start at 3
 		for (let c of buffer)
 		    tokens.push(c + 3);
 	    }
@@ -107,8 +152,39 @@ class Tokenizer {
 	    buffer = [];
 	}
 
-        // TODO: wait we're not done yet!!
- 
+        while (true) {
+            let best_score = -1e10;
+	    let best_id = -1;
+	    let best_idx = -1;
+
+	    for (let i = 0; i < tokens.length-1; i++)  {
+	        const t = tokens[i];
+		const tnext = tokens[i+1];
+
+                // check if we can merge the pair (t, tnext)
+		let merged = 
+		    this.vocab[t] + this.vocab[tnext]);
+
+		let id = this.str_lookup(merged);
+		if (id != -1 && this.vocab_scores[id] > best_score) {
+		    // this merge pair exists in vocab! record its score and position
+		    best_score = this.vocab_scores[id];
+		    best_id = id;
+		    best_idx = i;
+		}
+	    }
+
+            if (best_idx == -1)
+                break; // no more pairs to merge
+
+	    // merge consecutive pair into new token
+	    tokens[best_idx] = best_id;
+	    tokens.splice(best_idx+1, 1);
+	}
+
+        // optional EOS (=2) (</s>) token
+        if (eos) tokens.push(2);
+
         return tokens;
     }
     decoode(prev_token: number, token: number): string {
