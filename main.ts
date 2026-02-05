@@ -107,7 +107,7 @@ class Tokenizer {
         }
 
         // merge candidate buffer
-        let buffer = [];
+        let buffer: number[] = [];
         let tokens: number[] = [];
 
         // optional BOS (=1) (<s>) token
@@ -142,15 +142,16 @@ class Tokenizer {
                 continue;
 
             // ci+1 is not a continuation byte, so we've read in a full codepoint
+            // TODO: update buffer to operate on byte sequences as "strings"
+            // TODO: OR store buffer as one big string
             let id = this.str_lookup(buffer);
             if (id != -1) {
                 tokens.push(id);
             } else {
                 // byte_fallback encoding: just encode each byte as a token
                 // +3 is here because the first 3 vocab elements are <unk>, <s>, </s>
-                // TODO: shouLd I get a char instead of a byte here?
-                for (let c of buffer)
-                    tokens.push(c + 3);
+                for (let ch of buffer)
+                    tokens.push(ch + 3);
             }
 
             buffer = [];
