@@ -197,7 +197,7 @@ class Tokenizer {
 
         return tokens;
     }
-    decoode(prev_token: number, token: number): string {
+    decode(prev_token: number, token: number): string {
         let piece: string = this.vocab[token];
 
         // following BOS (1) token, sentencepiece decoder strips any leading whitespace (see PR #89)
@@ -640,7 +640,6 @@ interface ProbIndex {
 
 class Sampler {
     constructor(
-        readonly vocab_size: number,
         readonly temperature: number,
         readonly topp: number
     ) {}
@@ -747,16 +746,15 @@ class Sampler {
 }
 
 function generate_response(prompt: string): string {
-    // TODO: pass params into sampler
-    //let sampler = Sampler();
+    const checkpoint_path = "models/stories15M.bin";
+    const tokenizer_path = "tokenizer.bin";
+    const temperature = 1.0;
+    const topp = 0.9;
+    const steps = 256;
 
-    // TODO: tokenize prompt
-    const tokenizer = new Tokenizer();
+    const sampler = Sampler(temperature, topp);
 
-    let prompt_tokens = tokenizer.encode(
-        prompt, true, false);
-    if (prompt_tokens.length < 1)
-        throw "ERROR: too few tokens"
+    const tokenizer = new Tokenizer(tokenizer_path);
 
     //const fileLoader = new FileLoader("llama2/llama-2-7b-chat/params.json");
     const fileLoader = new FileLoader("models/stories15M.bin");
@@ -768,28 +766,43 @@ function generate_response(prompt: string): string {
         fileLoader.load_weights(config),
         Transformer.create_buffers(config)
     );
+    
+    let prompt_tokens = tokenizer.encode(
+        prompt, true, false);
+    if (prompt_tokens.length < 1)
+        throw "ERROR: too few tokens"
 
-    let next; // will store the next token in the sequence
-    let token = prompt_tokens[0];
+    let next_token: number; // will store the next token in the sequence
+    let token = prompt_tokens[i];
     let i = 0;
     while (i < steps) {
-        let token = prompt_tokens[i];
         let logits = transformer.forward(token, i);
 
-        // TODO: this!
         // advance the state machine
-        if (pos < num_prompt_tokens - 1) {
+        if (i < num_prompt_tokens - 1) {
             // if we are still processing the input prompt, force the next prompt toke
-            next = prompt_tokens[pos + 1];
+            next_token = prompt_tokens[i + 1];
         } else {
             // otherwise sample the next token from the logits
-            next = sample(sampler, logits);
+            next_token = sample(sampler, logits);
         }
 
-        position += 1;
+        i += 1;
         
-        // ...
+	// terminating condition:BOS (=1) token delimits sequences
+	if (next_token == 1) { break; }
+
+	// print the token as string, decode it with the Tokenizer object
+	string piece = tokenizer.decode(token, next_token);
+	
+	// TODO: impl this function
+	// same as printf("%s", piece), but skips "unsafe" bytes
+	safe_print(piece);
+	
+	token = next_token;
     }
+
+    console.log();
 
     return "NOT YET IMPLEMENTED";
 }
