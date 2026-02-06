@@ -664,31 +664,90 @@ class Sampler {
 	return max_i;
     }
 
-    // TODO: this func
+    function sample_mult(
+        probs: Float32Array,
+	coin: number
+    ): number {
+        // probabilities must sum to 1!
+	let cdf = 0.0;
+	for (let i = 0; i < (probs.length - 1); i++) {
+	    cdf += probs[i];
+	    if (coin < cdf)
+	        return i;
+	}
+	return probs.length - 1;
+    }
+
+    function sample_topp(
+        probs: Float32Array,
+	topp: number, 
+        probindex: ProbIndex, coin: number
+    ): number {
+        // top-p sampling (or "nucleus sampling") samples from the smallest set of
+        // tokens that exceed probability topp. This way we never sample tokens that
+	// have very low probabilities and are less likely to go "off the rails".
+        // coin is a random number in [0, 1), usually from random_f32()
+
+        let prob_index = []
+
+	// quicksort indices in descending order of probabilities
+	// values smaller than (1 - topp) / (n - 1) cannot be part of the result
+	// so for efficiency we crop these out as candidates before sorting
+
+	const cutoff = (1.0-topp) / (probs.length - 1);
+        for (let i = 0; i < probs.length; i++) {
+	    if (probs[i] >= cutoff) {
+	        probindex.push({
+		    index: i,
+		    prob: probs[i],
+		});
+	    }
+	}
+	
+	prob_index.sort(x => x.prob);
+
+	let cumulative_prob = 0.0;
+	let last_idx = prob_index.length - 1; 
+
+	for (let i = 0; i < prob_index.lenth; i++) {
+	    cumulative_prob += prob_index[i].prob;
+	    if (cumulative_prob > topp) {
+	        last_idx = i;
+		break;
+	    }
+	}
+
+        // sample from the truncated list
+	let r = coin * cumulative_prob;
+	let cdf = 0.0;
+	for (let i = 0; i <= last_idx; i++) {
+	    cdf += prob_index[i].prob;
+	    if (r < cdf)
+	        return prob_index[i].index;
+	}
+
+	return prob_index[last_idx].index;
+    }
+
     function sample(logits: Float32Array): number {
-        // sample the token given the logits and some hyperparameters
 	let next;
 	if (this.temperature == 0.0) {
-	    // greedy argmax sampling: take the token with the highest probability
+	    // token with the highest probability
 	    next = sample_argmax(logits);
 	} else {
-	    // apply the temperature to the logits
-	    for (let q=0; q<sampler->vocab_size; q++)
-	        logits[q] /= this.temperature;
+	    // softmax maintains differences, so small temperature amplifies differences and approximates argmax
+	    for (let qi = 0; qi < this.vocab_size; qi++)
+	        logits[qi] /= this.temperature;
 
-	    // apply softmax to the logits to get the probabilities for next token
-	    softmax(logits, sampler->vocab_size);
+	    softmax(logits);
 
-	    // flip a (float) coin (this is our source of entropy for sampling)
-	    let coin = random_f32(&sampler->rng_state);
-
-	    // we sample from this distribution to get the next token
-	    if (sampler->topp <= 0 || sampler->topp >= 1) {
+	    let coin = Math.random();
+	    if (this.topp <= 0 || this.topp >= 1) {
 	        // simply sample from the predicted probability distribution
-		next = sample_mult(logits, sampler->vocab_size, coin);
+		next = sample_mult(logits, coin);
             } else {
-	        // top-p (nucleus) sampling, clamping the least likely tokens to zero
-		next = sample_topp(logits, sampler->vocab_size, sampler->topp, sampler->probindex, coin);
+	        // top-p sampling clamps lowest to zero
+		next = sample_topp(logits, this.topp, this.prob_index, coin);
 	    }
 	}
 	return next;
@@ -696,8 +755,16 @@ class Sampler {
 }
 
 function generate_response(prompt: string): string {
+    // TODO: pass params into sampler
+    //let sampler = Sampler();
+
     // TODO: tokenize prompt
     const tokenizer = new Tokenizer();
+
+    let prompt_tokens = tokenizer.encode(
+        prompt, true, false);
+    if (prompt_tokens.length < 1)
+        throw "ERROR: too few tokens"
 
     //const fileLoader = new FileLoader("llama2/llama-2-7b-chat/params.json");
     const fileLoader = new FileLoader("models/stories15M.bin");
@@ -709,9 +776,27 @@ function generate_response(prompt: string): string {
         fileLoader.load_weights(config),
         Transformer.create_buffers(config)
     );
-    
-    // TODO: read through how the temperature thing works & figure out how to generate a response
 
+    let next; // will store the next token in the sequence
+    let token = prompt_tokens[0];
+    let i = 0;
+    while (i < steps) {
+        let token = prompt_tokens[i];
+        let logits = transformer.forward(token, i);
+
+        // TODO: this!
+	// advance the state machine
+	if (pos < num_prompt_tokens - 1) {
+	    // if we are still processing the input prompt, force the next prompt toke
+	    next = prompt_tokens[pos + 1];
+	} else {
+	    // otherwise sample the next token from the logits
+	    next = sample(sampler, logits);
+	}
+
+	position += 1;
+
+    
     return "NOT YET IMPLEMENTED";
 }
 
