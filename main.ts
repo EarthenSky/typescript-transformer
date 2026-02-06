@@ -639,118 +639,110 @@ interface ProbIndex {
 }
 
 class Sampler {
-    prob_index: ProbIndex[];
-
     constructor(
         readonly vocab_size: number,
-	readonly temperature: number,
-	readonly topp: number,
-	readonly rng_seed: number
-    ) {
-        this.prob_index = [];
-    }
+        readonly temperature: number,
+        readonly topp: number
+    ) {}
 
-    function sample_argmax(probs: Float32Array): number {
+    sample_argmax(probs: Float32Array): number {
         let max_i = 0;
-	let max_p = probs[0];
+        let max_p = probs[0];
 
-	for (let i = 0; i < probs.length; i++) {
-	    if (probs[i] > max_p) {
-	        max_i = i;
-		max_p = probs[i];
-	    }
-	}
+        for (let i = 0; i < probs.length; i++) {
+            if (probs[i] > max_p) {
+                max_i = i;
+                max_p = probs[i];
+            }
+        }
 
-	return max_i;
+        return max_i;
     }
 
-    function sample_mult(
+    sample_mult(
         probs: Float32Array,
-	coin: number
+	    coin: number
     ): number {
         // probabilities must sum to 1!
-	let cdf = 0.0;
-	for (let i = 0; i < (probs.length - 1); i++) {
-	    cdf += probs[i];
-	    if (coin < cdf)
-	        return i;
-	}
-	return probs.length - 1;
+        let cdf = 0.0;
+        for (let i = 0; i < (probs.length - 1); i++) {
+            cdf += probs[i];
+            if (coin < cdf)
+                return i;
+	    }
+	    return probs.length - 1;
     }
 
-    function sample_topp(
+    sample_topp(
         probs: Float32Array,
-	topp: number, 
-        probindex: ProbIndex, coin: number
+        coin: number
     ): number {
         // top-p sampling (or "nucleus sampling") samples from the smallest set of
         // tokens that exceed probability topp. This way we never sample tokens that
-	// have very low probabilities and are less likely to go "off the rails".
+	    // have very low probabilities and are less likely to go "off the rails".
         // coin is a random number in [0, 1), usually from random_f32()
 
-        let prob_index = []
+        let prob_index: ProbIndex[] = [];
 
-	// quicksort indices in descending order of probabilities
-	// values smaller than (1 - topp) / (n - 1) cannot be part of the result
-	// so for efficiency we crop these out as candidates before sorting
-
-	const cutoff = (1.0-topp) / (probs.length - 1);
-        for (let i = 0; i < probs.length; i++) {
-	    if (probs[i] >= cutoff) {
-	        probindex.push({
-		    index: i,
-		    prob: probs[i],
-		});
+        // quicksort indices in descending order of probabilities
+        // values smaller than (1 - topp) / (n - 1) cannot be part of the result
+        // so for efficiency we crop these out as candidates before sorting
+        const cutoff = (1.0-this.topp) / (probs.length - 1);
+            for (let i = 0; i < probs.length; i++) {
+            if (probs[i] >= cutoff) {
+                prob_index.push({
+                    index: i,
+                    prob: probs[i],
+                });
+            }
 	    }
-	}
 	
-	prob_index.sort(x => x.prob);
+        prob_index.sort(x => x.prob);
 
-	let cumulative_prob = 0.0;
-	let last_idx = prob_index.length - 1; 
-
-	for (let i = 0; i < prob_index.lenth; i++) {
-	    cumulative_prob += prob_index[i].prob;
-	    if (cumulative_prob > topp) {
-	        last_idx = i;
-		break;
-	    }
-	}
+        let cumulative_prob = 0.0;
+        let last_i = prob_index.length - 1; 
+        for (let i = 0; i < prob_index.length; i++) {
+            cumulative_prob += prob_index[i].prob;
+            if (cumulative_prob > this.topp) {
+                last_i = i;
+                break;
+            }
+        }
 
         // sample from the truncated list
-	let r = coin * cumulative_prob;
-	let cdf = 0.0;
-	for (let i = 0; i <= last_idx; i++) {
-	    cdf += prob_index[i].prob;
-	    if (r < cdf)
-	        return prob_index[i].index;
-	}
+        let r = coin * cumulative_prob;
+        let cdf = 0.0;
+        for (let i = 0; i <= last_i; i++) {
+            cdf += prob_index[i].prob;
+            if (r < cdf)
+                return prob_index[i].index;
+        }
 
-	return prob_index[last_idx].index;
+        return prob_index[last_i].index;
     }
 
-    function sample(logits: Float32Array): number {
-	let next;
-	if (this.temperature == 0.0) {
-	    // token with the highest probability
-	    next = sample_argmax(logits);
-	} else {
-	    // softmax maintains differences, so small temperature amplifies differences and approximates argmax
-	    for (let qi = 0; qi < this.vocab_size; qi++)
-	        logits[qi] /= this.temperature;
+    sample(logits: Float32Array): number {
+        let next;
+        if (this.temperature == 0.0) {
+            // token with the highest probability
+            next = this.sample_argmax(logits);
+        } else {
+            // softmax maintains differences, so small temperature amplifies differences and approximates argmax
+            for (let qi = 0; qi < this.vocab_size; qi++)
+                logits[qi] /= this.temperature;
 
-	    softmax(logits);
+            softmax(logits);
 
-	    let coin = Math.random();
-	    if (this.topp <= 0 || this.topp >= 1) {
-	        // simply sample from the predicted probability distribution
-		next = sample_mult(logits, coin);
+            let coin = Math.random();
+            if (this.topp <= 0 || this.topp >= 1) {
+                // simply sample from the predicted probability distribution
+                next = this.sample_mult(logits, coin);
             } else {
-	        // top-p sampling clamps lowest to zero
-		next = sample_topp(logits, this.topp, this.prob_index, coin);
-	    }
-	}
-	return next;
+                // top-p sampling clamps lowest to zero
+                next = this.sample_topp(logits, coin);
+            }
+        }
+        return next;
     }
 }
 
@@ -785,18 +777,20 @@ function generate_response(prompt: string): string {
         let logits = transformer.forward(token, i);
 
         // TODO: this!
-	// advance the state machine
-	if (pos < num_prompt_tokens - 1) {
-	    // if we are still processing the input prompt, force the next prompt toke
-	    next = prompt_tokens[pos + 1];
-	} else {
-	    // otherwise sample the next token from the logits
-	    next = sample(sampler, logits);
-	}
+        // advance the state machine
+        if (pos < num_prompt_tokens - 1) {
+            // if we are still processing the input prompt, force the next prompt toke
+            next = prompt_tokens[pos + 1];
+        } else {
+            // otherwise sample the next token from the logits
+            next = sample(sampler, logits);
+        }
 
-	position += 1;
+        position += 1;
+        
+        // ...
+    }
 
-    
     return "NOT YET IMPLEMENTED";
 }
 
