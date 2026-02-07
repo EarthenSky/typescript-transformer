@@ -1,14 +1,19 @@
 import fs from 'fs';
 
-
 // U must be comparable
-function bsearch<T, U>(xs: T[], t: U, f: (x:T) => U): T | null {
+function bsearch<T, U>(
+    xs: T[],
+    t: U,
+    f: (x:T) => U,
+    lt: (x: U, y: U) => boolean
+): T | null {
     let topi = xs.length - 1;
     let boti = 0;
 
     while ((topi - boti) <= 4) {
         let m = Math.trunc((topi + boti)/2);
-        if (t > f(xs[m])) boti = m;
+	let fm = f(xs[m]);
+        if (lt(t, fm)) boti = m;
 	else topi = m;
    
     // we do a small stride at the end for perf
@@ -21,12 +26,15 @@ function bsearch<T, U>(xs: T[], t: U, f: (x:T) => U): T | null {
 }
 
 interface TokenIndex {
-   str: number[],
+   bytes: number[],
    id: number,
 };
 
+const NUL = 0;
+const BOS = 1;
+const EOS = 2;
+
 class Tokenizer {
-    // TODO: how to do array of array?
     vocab: number[][];
     vocab_scores: Float32Array;
     max_token_length: number;
@@ -37,7 +45,7 @@ class Tokenizer {
     constructor(
         tokenizer_path: string, readonly vocab_size: number
     ) {
-        this.vocab = new Array(vocab_size);
+        this.vocab = [];
         this.vocab_scores = new Float32Array(vocab_size);
         this.sorted_vocab = [];
 
@@ -82,19 +90,24 @@ class Tokenizer {
             position += bytes_read;
         }
     }
-    // TODO: implement this & fix the sorting of vocab
-    static compare_raw_str(a:number[], b:number[]): number {
-        if (a.str == b.str) return 0;
-        else if (a.str < b.str) return -1;
-        else return 1;
+    static compare_bytes(a:number[], b:number[]): number {
+        for (let i = 0; i < Math.min(a.length, b.length); i++) {
+            if (a[i] < b[i])
+	        return -1;
+	    else if (a[i] > b[i])
+	        return 1;
+	}
+
+        if (a.length < b.length) return -1;
+	else if (a.length > b.length) return 1;
+        else return 0;
     }
     // find the perfect match for str in vocab, return its index or -1 if not found
-    str_lookup(str:number[]): number {
-        let t = bsearch(this.sorted_vocab, str, x => x.str, Tokenizer.compare_raw_str);
+    str_lookup(bytes:number[]): number {
+        let t = bsearch(this.sorted_vocab, str, x => x.bytes, Tokenizer.compare_bytes);
         return res == null ? -1 : t.id;
     }
     encode(
-        // todo: ensure text is ascii, despite being u16
         text: string, bos: boolean, eos: boolean
     ): number[] {
         if (text == "") throw "text cannot be empty";
@@ -103,7 +116,7 @@ class Tokenizer {
             // lazily alloc and sort the vocabulary
             for (let i = 0; i < this.vocab_size; i++) {
                 this.sorted_vocab[i] = {
-                    str: this.vocab[i],
+                    bytes: this.vocab[i],
                     id: i,
                 };
             }
@@ -116,15 +129,17 @@ class Tokenizer {
         let buffer: number[] = [];
         let tokens: number[] = [];
 
-        // optional BOS (=1) (<s>) token
-        if (bos) tokens.push(1);
+        // optional BOS (<s>) token
+        if (bos) tokens.push(BOS);
 
         // so prepend a dummy prefix token to the input string, but only if text != ""
         // TODO: pretty sure this isn't correct in the general case but I don't have the
         // energy to read more of the sentencepiece code to figure out what it's doing
         // TODO(gabe): what is he talking about?
         if (text.length > 0) {
-            let dummy_prefix = this.str_lookup(" ");
+            let dummy_prefix = this.str_lookup(
+	        [" ".charCodeAt(0)]
+	    );
             tokens.push(dummy_prefix);
         }
 
@@ -138,8 +153,7 @@ class Tokenizer {
 
             buffer.push(text.charCodeAt(ci));
 
-            // while the next character is a continuation byte, continue appending
-            // but if there are too many of them, just stop (> 4 is invalid anyways)
+            // while the next character is a continuation byte, append
             if (
                 (text.harCodeAt(ci+1)&0xC0) == 0x80
                 && buffer.length < 4
@@ -148,13 +162,13 @@ class Tokenizer {
 
             // ci+1 is not a continuation byte, so we've read in a full codepoint
             // TODO: update buffer to operate on byte sequences as "strings"
-            // TODO: OR store buffer as one big string
+            // TODO: OR stores buffer as one big string
             let id = this.str_lookup(buffer);
             if (id != -1) {
                 tokens.push(id);
             } else {
                 // byte_fallback encoding: just encode each byte as a token
-                // +3 is here because the first 3 vocab elements are <unk>, <s>, </s>
+                // +3 is here b/c the first 3 tokens are <unk>, <s>, </s>
                 for (let byte of buffer)
                     tokens.push(byte + 3);
             }
@@ -177,7 +191,7 @@ class Tokenizer {
 
                 let id = this.str_lookup(merged);
                 if (id != -1 && this.vocab_scores[id] > best_score) {
-                    // this merge pair exists in vocab! record its score and position
+                    // merge pair exists in vocab! record its score and position
                     best_score = this.vocab_scores[id];
                     best_id = id;
                     best_idx = i;
@@ -192,22 +206,29 @@ class Tokenizer {
             tokens.splice(best_idx+1, 1);
         }
 
-        // optional EOS (=2) (</s>) token
-        if (eos) tokens.push(2);
+        // optional EOS (</s>) token
+        if (eos) tokens.push(EOS);
 
         return tokens;
     }
     decode(prev_token: number, token: number): string {
-        let piece: string = this.vocab[token];
+        let piece: number[] = this.vocab[token];
 
-        // following BOS (1) token, sentencepiece decoder strips any leading whitespace (see PR #89)
-        if (prev_token == 1 && piece[0] == ' ')
+        // following BOS, sentencepiece decoder strips any leading whitespace
+        if (prev_token == BOS && piece[0] == " ".charCodeAt(0))
             piece = piece.slice(1);
 
         // careful, some tokens designate raw bytes, and look like e.g. '<0x01>'
         // parse this and convert and return the actual byte
-        let m = piece.match("<0x\d+>");
-        if (m) {
+	let is_raw_bytes =
+	    (piece.length > 4)
+	    && piece[0] == "<".charCodeAt(0)
+	    && piece[1] == "0".charCodeAt(0)
+	    && piece[2] == "x".charCodeAt(0)
+	    && piece[piece.length-1] == ">".charCodeAt(0)
+	// TODO: ensure byte-pieces is valid
+	// TODO: ensure pieces is decoded to a utf8 js string correctly!
+        if (is_raw_bytes) {
             return this.byte_pieces[Number(m[0])];
         } else {
             return piece;
