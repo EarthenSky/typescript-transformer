@@ -6,20 +6,21 @@ function bsearch<T, U>(
     t: U,
     f: (x:T) => U,
     lt: (x: U, y: U) => boolean
-): T | null {
+): number | null {
     let topi = xs.length - 1;
     let boti = 0;
 
     while ((topi - boti) <= 4) {
         let m = Math.trunc((topi + boti)/2);
-	let fm = f(xs[m]);
+        let fm = f(xs[m]);
         if (lt(t, fm)) boti = m;
-	else topi = m;
+        else topi = m;
+    }
    
     // we do a small stride at the end for perf
     // (also to avoid worrying about rounding issues)
     for (let i = boti; i <= topi; i++)
-        if (xs[i] == t)
+        if (f(xs[i]) == t)
             return i;
 
     return null;
@@ -30,7 +31,7 @@ interface TokenIndex {
    id: number,
 };
 
-const NUL = 0;
+const UNK = 0;
 const BOS = 1;
 const EOS = 2;
 
@@ -40,7 +41,7 @@ class Tokenizer {
     max_token_length: number;
 
     sorted_vocab: TokenIndex[];
-    byte_pieces: number[];
+    byte_pieces: string[];
 
     constructor(
         tokenizer_path: string, readonly vocab_size: number
@@ -121,8 +122,7 @@ class Tokenizer {
                 };
             }
 
-            this.sorted_vocab.sort(
-                Tokenizer.compare_tokens);
+            this.sorted_vocab.sort(Tokenizer.compare_tokens);
         }
 
         // merge candidate buffer
@@ -155,7 +155,7 @@ class Tokenizer {
 
             // while the next character is a continuation byte, append
             if (
-                (text.harCodeAt(ci+1)&0xC0) == 0x80
+                (text.charCodeAt(ci+1)&0xC0) == 0x80
                 && buffer.length < 4
             )
                 continue;
@@ -186,8 +186,7 @@ class Tokenizer {
                 const tnext: number = tokens[i+1];
 
                 // check if we can merge the pair (t, tnext)
-                let merged = 
-                    this.vocab[t] + this.vocab[tnext];
+                let merged = this.vocab[t].concat(this.vocab[tnext]);
 
                 let id = this.str_lookup(merged);
                 if (id != -1 && this.vocab_scores[id] > best_score) {
@@ -220,17 +219,17 @@ class Tokenizer {
 
         // careful, some tokens designate raw bytes, and look like e.g. '<0x01>'
         // parse this and convert and return the actual byte
-	let is_raw_bytes =
-	    (piece.length > 4)
-	    && piece[0] == "<".charCodeAt(0)
-	    && piece[1] == "0".charCodeAt(0)
-	    && piece[2] == "x".charCodeAt(0)
-	    && piece[piece.length-1] == ">".charCodeAt(0)
-	// TODO: ensure byte-pieces is valid
-	// TODO: ensure pieces is decoded to a utf8 js string correctly!
+        let is_raw_bytes =
+            (piece.length > 4)
+            && piece[0] == "<".charCodeAt(0)
+            && piece[1] == "0".charCodeAt(0)
+            && piece[2] == "x".charCodeAt(0)
+            && piece[piece.length-1] == ">".charCodeAt(0);
+
         if (is_raw_bytes) {
-            return this.byte_pieces[Number(m[0])];
+            return this.byte_pieces[Number(piece.slice(3, -1))];
         } else {
+            // TODO: ensure pieces is decoded to a utf8 js string correctly!
             return piece;
         }
     }
@@ -766,6 +765,10 @@ class Sampler {
     }
 }
 
+function safe_print() {
+    // TODO: wut?
+}
+
 function generate_response(prompt: string): string {
     const checkpoint_path = "models/stories15M.bin";
     const tokenizer_path = "tokenizer.bin";
@@ -778,7 +781,7 @@ function generate_response(prompt: string): string {
     const tokenizer = new Tokenizer(tokenizer_path);
 
     //const fileLoader = new FileLoader("llama2/llama-2-7b-chat/params.json");
-    const fileLoader = new FileLoader("models/stories15M.bin");
+    const fileLoader = new FileLoader(checkpoint_path);
     const config = fileLoader.load_config();
     console.log(`config = ${JSON.stringify(config, null, 2)}`);
 
@@ -800,27 +803,27 @@ function generate_response(prompt: string): string {
         let logits = transformer.forward(token, i);
 
         // advance the state machine
-        if (i < num_prompt_tokens - 1) {
+        if (i < prompt_tokens.length - 1) {
             // if we are still processing the input prompt, force the next prompt toke
             next_token = prompt_tokens[i + 1];
         } else {
             // otherwise sample the next token from the logits
-            next_token = sample(sampler, logits);
+            next_token = sampler.sample(sampler, logits);
         }
 
         i += 1;
         
-	// terminating condition:BOS (=1) token delimits sequences
-	if (next_token == 1) { break; }
+        // terminating condition:BOS (=1) token delimits sequences
+        if (next_token == 1) { break; }
 
-	// print the token as string, decode it with the Tokenizer object
-	string piece = tokenizer.decode(token, next_token);
-	
-	// TODO: impl this function
-	// same as printf("%s", piece), but skips "unsafe" bytes
-	safe_print(piece);
-	
-	token = next_token;
+        // print the token as string, decode it with the Tokenizer object
+        let piece = tokenizer.decode(token, next_token);
+        
+        // TODO: impl this function
+        // same as printf("%s", piece), but skips "unsafe" bytes
+        safe_print(piece);
+        
+        token = next_token;
     }
 
     console.log();
