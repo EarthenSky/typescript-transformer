@@ -5,7 +5,7 @@ function bsearch<T, U>(
     xs: T[],
     t: U,
     f: (x:T) => U,
-    lt: (x: U, y: U) => boolean
+    compare: (x: U, y: U) => number
 ): number | null {
     let topi = xs.length - 1;
     let boti = 0;
@@ -13,10 +13,10 @@ function bsearch<T, U>(
     while ((topi - boti) <= 4) {
         let m = Math.trunc((topi + boti)/2);
         let fm = f(xs[m]);
-        if (lt(t, fm)) boti = m;
+        if (compare(t, fm) < 0) boti = m;
         else topi = m;
     }
-   
+
     // we do a small stride at the end for perf
     // (also to avoid worrying about rounding issues)
     for (let i = boti; i <= topi; i++)
@@ -36,18 +36,18 @@ const BOS = 1;
 const EOS = 2;
 
 class Tokenizer {
-    vocab: number[][];
+    vocab: string[]; // token to utf-8 string mapping
+    sorted_vocab: TokenIndex[]; // searchable format
     vocab_scores: Float32Array;
-    max_token_length: number;
 
-    sorted_vocab: TokenIndex[];
     byte_pieces: string[];
 
     constructor(
-        tokenizer_path: string, readonly vocab_size: number
+        tokenizer_path: string,
+        readonly vocab_size: number
     ) {
         this.vocab = [];
-        this.vocab_scores = new Float32Array(vocab_size);
+        this.vocab_scores = new Float32Array(this.vocab_size);
         this.sorted_vocab = [];
 
         this.byte_pieces = [];
@@ -59,16 +59,16 @@ class Tokenizer {
             throw "ERROR: bad checkpoint path";
 
         const HDR_SIZE = 4;
-        const data = new Uint8Array(HDR_SIZE);
-        const bytes_read = fs.readSync(f, data, 0, HDR_SIZE, 0);
-        if (bytes_read != HDR_SIZE)
-            throw "ERROR: failed to read config";
-
-        const view = new DataView(data.buffer);
-        this.max_token_length = view.getInt32(0 * 4, true);
+        // const data = new Uint8Array(HDR_SIZE);
+        // const bytes_read = fs.readSync(f, data, 0, HDR_SIZE, 0);
+        // if (bytes_read != HDR_SIZE)
+        //     throw "ERROR: failed to read config";
+        //
+        // const view = new DataView(data.buffer);
+        // const max_token_length = view.getInt32(0 * 4, true);
 
         let position = HDR_SIZE;
-        for (let i = 0; i < vocab_size; i++) {
+        for (let i = 0; i < this.vocab_size; i++) {
             const ENTRY_HDR_SIZE = 4 + 4;
             const data = new Uint8Array(ENTRY_HDR_SIZE);
             let bytes_read = fs.readSync(f, data, 0, ENTRY_HDR_SIZE, position);
@@ -78,35 +78,39 @@ class Tokenizer {
         
             const view = new DataView(data.buffer);
             this.vocab_scores[i] = view.getFloat32(0 * 4, true); 
-            let len = view.getInt32(1 * 4, true);
+            console.log(`score = ${this.vocab_scores[i]}`);
+            
+            const len = view.getInt32(1 * 4, true);
+            console.log(`len = ${len}`);
 
             const vocab_data = new Uint8Array(len);
             bytes_read = fs.readSync(f, vocab_data, len, 1, position);
             if (bytes_read != len)
                 throw "ERROR";
-
-            for (let j = 0; j < len; j++)
-	        this.vocab[i].push(vocab_data[j]);
-
             position += bytes_read;
+
+	        this.vocab[i] = (new TextDecoder("utf-8")).decode(vocab_data);
         }
     }
     static compare_bytes(a:number[], b:number[]): number {
         for (let i = 0; i < Math.min(a.length, b.length); i++) {
             if (a[i] < b[i])
-	        return -1;
-	    else if (a[i] > b[i])
-	        return 1;
-	}
+                return -1;
+            else if (a[i] > b[i])
+                return 1;
+        }
 
         if (a.length < b.length) return -1;
-	else if (a.length > b.length) return 1;
+        else if (a.length > b.length) return 1;
         else return 0;
     }
-    // find the perfect match for str in vocab, return its index or -1 if not found
+    static bytes_from_str(s:string): number[] {
+        return Array.from((new TextEncoder()).encode(s));
+    }
     str_lookup(bytes:number[]): number {
-        let t = bsearch(this.sorted_vocab, str, x => x.bytes, Tokenizer.compare_bytes);
-        return res == null ? -1 : t.id;
+        // find the perfect match for str in vocab, return its index or -1 if not found
+        let ti = bsearch(this.sorted_vocab, bytes, x => x.bytes, Tokenizer.compare_bytes);
+        return ti == null ? -1 : this.sorted_vocab[ti].id;
     }
     encode(
         text: string, bos: boolean, eos: boolean
@@ -117,12 +121,12 @@ class Tokenizer {
             // lazily alloc and sort the vocabulary
             for (let i = 0; i < this.vocab_size; i++) {
                 this.sorted_vocab[i] = {
-                    bytes: this.vocab[i],
+                    bytes: Tokenizer.bytes_from_str(this.vocab[i]),
                     id: i,
                 };
             }
 
-            this.sorted_vocab.sort(Tokenizer.compare_tokens);
+            this.sorted_vocab.sort((x,y) => Tokenizer.compare_bytes(x.bytes, y.bytes));
         }
 
         // merge candidate buffer
@@ -135,7 +139,7 @@ class Tokenizer {
         // so prepend a dummy prefix token to the input string, but only if text != ""
         // TODO: pretty sure this isn't correct in the general case but I don't have the
         // energy to read more of the sentencepiece code to figure out what it's doing
-        // TODO(gabe): what is he talking about?
+        // TODO: (gabe) what is he talking about?
         if (text.length > 0) {
             let dummy_prefix = this.str_lookup(
 	        [" ".charCodeAt(0)]
@@ -155,14 +159,11 @@ class Tokenizer {
 
             // while the next character is a continuation byte, append
             if (
-                (text.charCodeAt(ci+1)&0xC0) == 0x80
-                && buffer.length < 4
+                (text.charCodeAt(ci+1) & 0xC0) == 0x80 && buffer.length < 4
             )
                 continue;
 
             // ci+1 is not a continuation byte, so we've read in a full codepoint
-            // TODO: update buffer to operate on byte sequences as "strings"
-            // TODO: OR stores buffer as one big string
             let id = this.str_lookup(buffer);
             if (id != -1) {
                 tokens.push(id);
@@ -185,8 +186,11 @@ class Tokenizer {
                 const t: number = tokens[i];
                 const tnext: number = tokens[i+1];
 
+                const t_bytes = Tokenizer.bytes_from_str(this.vocab[t]);
+                const tnext_bytes = Tokenizer.bytes_from_str(this.vocab[tnext]);
+
                 // check if we can merge the pair (t, tnext)
-                let merged = this.vocab[t].concat(this.vocab[tnext]);
+                let merged: number[] = t_bytes.concat(tnext_bytes);
 
                 let id = this.str_lookup(merged);
                 if (id != -1 && this.vocab_scores[id] > best_score) {
@@ -197,8 +201,9 @@ class Tokenizer {
                 }
             }
 
+            // no more pairs to merge
             if (best_idx == -1)
-                break; // no more pairs to merge
+                break;
 
             // merge consecutive pair into new token
             tokens[best_idx] = best_id;
@@ -211,25 +216,24 @@ class Tokenizer {
         return tokens;
     }
     decode(prev_token: number, token: number): string {
-        let piece: number[] = this.vocab[token];
+        let piece: string = this.vocab[token];
 
         // following BOS, sentencepiece decoder strips any leading whitespace
-        if (prev_token == BOS && piece[0] == " ".charCodeAt(0))
+        if (prev_token == BOS && piece[0] == " ")
             piece = piece.slice(1);
 
         // careful, some tokens designate raw bytes, and look like e.g. '<0x01>'
         // parse this and convert and return the actual byte
         let is_raw_bytes =
             (piece.length > 4)
-            && piece[0] == "<".charCodeAt(0)
-            && piece[1] == "0".charCodeAt(0)
-            && piece[2] == "x".charCodeAt(0)
-            && piece[piece.length-1] == ">".charCodeAt(0);
+            && piece[0] == "<"
+            && piece[1] == "0"
+            && piece[2] == "x"
+            && piece[piece.length-1] == ">";
 
         if (is_raw_bytes) {
             return this.byte_pieces[Number(piece.slice(3, -1))];
         } else {
-            // TODO: ensure pieces is decoded to a utf8 js string correctly!
             return piece;
         }
     }
@@ -289,7 +293,7 @@ function vecmatmul(
 function view(
     x: Float32Array,
     start: number,
-    size: number
+    size: number,
 ): Float32Array {
     return x.subarray(start, start+size);
 }
@@ -338,12 +342,11 @@ interface RuntimeBuffers {
     // for attention
     q: Float32Array; // (dim,)
 
-    // TODO: this
     att: Float32Array; // (n_heads, seq_len)
     logits: Float32Array;
 
     // kv cache
-    key_cache: Float32Array; // (
+    key_cache: Float32Array; // (n_layers, seq_len, n_kv_heads * head_size) 
     value_cache: Float32Array;
 };
 
@@ -661,7 +664,7 @@ interface ProbIndex {
 class Sampler {
     constructor(
         readonly temperature: number,
-        readonly topp: number
+        readonly topp: number,
     ) {}
 
     sample_argmax(probs: Float32Array): number {
@@ -680,9 +683,9 @@ class Sampler {
 
     sample_mult(
         probs: Float32Array,
-	    coin: number
+	    coin: number,
     ): number {
-        // probabilities must sum to 1!
+        // probabilities must sum to 1 !
         let cdf = 0.0;
         for (let i = 0; i < (probs.length - 1); i++) {
             cdf += probs[i];
@@ -694,20 +697,18 @@ class Sampler {
 
     sample_topp(
         probs: Float32Array,
-        coin: number
+        coin: number,
     ): number {
         // top-p sampling (or "nucleus sampling") samples from the smallest set of
         // tokens that exceed probability topp. This way we never sample tokens that
 	    // have very low probabilities and are less likely to go "off the rails".
-        // coin is a random number in [0, 1), usually from random_f32()
 
         let prob_index: ProbIndex[] = [];
 
-        // quicksort indices in descending order of probabilities
-        // values smaller than (1 - topp) / (n - 1) cannot be part of the result
-        // so for efficiency we crop these out as candidates before sorting
+        // sort indices in descending order of probabilities, then remove all
+        // values smaller than (1 - topp) / (n - 1)
         const cutoff = (1.0-this.topp) / (probs.length - 1);
-            for (let i = 0; i < probs.length; i++) {
+        for (let i = 0; i < probs.length; i++) {
             if (probs[i] >= cutoff) {
                 prob_index.push({
                     index: i,
@@ -747,14 +748,14 @@ class Sampler {
             next = this.sample_argmax(logits);
         } else {
             // softmax maintains differences, so small temperature amplifies differences and approximates argmax
-            for (let qi = 0; qi < this.vocab_size; qi++)
+            for (let qi = 0; qi < logits.length; qi++)
                 logits[qi] /= this.temperature;
 
             softmax(logits);
 
             let coin = Math.random();
             if (this.topp <= 0 || this.topp >= 1) {
-                // simply sample from the predicted probability distribution
+                // sample from the predicted probability distribution
                 next = this.sample_mult(logits, coin);
             } else {
                 // top-p sampling clamps lowest to zero
@@ -765,22 +766,13 @@ class Sampler {
     }
 }
 
-function safe_print() {
-    // TODO: wut?
-}
-
 function generate_response(prompt: string): string {
-    const checkpoint_path = "models/stories15M.bin";
-    const tokenizer_path = "tokenizer.bin";
+    const checkpoint_path = "data/models/stories15M.bin"; // "llama2/llama-2-7b-chat/params.json"
+    const tokenizer_path = "data/tokenizer.bin";
     const temperature = 1.0;
     const topp = 0.9;
     const steps = 256;
 
-    const sampler = Sampler(temperature, topp);
-
-    const tokenizer = new Tokenizer(tokenizer_path);
-
-    //const fileLoader = new FileLoader("llama2/llama-2-7b-chat/params.json");
     const fileLoader = new FileLoader(checkpoint_path);
     const config = fileLoader.load_config();
     console.log(`config = ${JSON.stringify(config, null, 2)}`);
@@ -790,15 +782,17 @@ function generate_response(prompt: string): string {
         fileLoader.load_weights(config),
         Transformer.create_buffers(config)
     );
+    const tokenizer = new Tokenizer(tokenizer_path, config.vocab_size);
+    const sampler = new Sampler(temperature, topp);
     
     let prompt_tokens = tokenizer.encode(
         prompt, true, false);
     if (prompt_tokens.length < 1)
         throw "ERROR: too few tokens"
 
+    let i = 0;
     let next_token: number; // will store the next token in the sequence
     let token = prompt_tokens[i];
-    let i = 0;
     while (i < steps) {
         let logits = transformer.forward(token, i);
 
@@ -808,20 +802,17 @@ function generate_response(prompt: string): string {
             next_token = prompt_tokens[i + 1];
         } else {
             // otherwise sample the next token from the logits
-            next_token = sampler.sample(sampler, logits);
+            next_token = sampler.sample(logits);
         }
 
         i += 1;
-        
+
         // terminating condition:BOS (=1) token delimits sequences
         if (next_token == 1) { break; }
 
         // print the token as string, decode it with the Tokenizer object
         let piece = tokenizer.decode(token, next_token);
-        
-        // TODO: impl this function
-        // same as printf("%s", piece), but skips "unsafe" bytes
-        safe_print(piece);
+        console.log(piece);
         
         token = next_token;
     }

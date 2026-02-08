@@ -1,9 +1,12 @@
 venv
 llama2
-models
+data
 
 # bin
 dist
+
+# node
+node_modules
 
 # we're not distributing a lib
 .pnp.cjs
