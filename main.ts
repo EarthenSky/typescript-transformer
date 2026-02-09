@@ -10,18 +10,22 @@ function bsearch<T, U>(
     let topi = xs.length - 1;
     let boti = 0;
 
-    while ((topi - boti) <= 4) {
-        let m = Math.trunc((topi + boti)/2);
-        let fm = f(xs[m]);
-        if (compare(t, fm) < 0) boti = m;
-        else topi = m;
+    // console.log(`\tbsearch :: (${boti},${topi})`)
+    while ((topi - boti) > 4) {
+        let mi = Math.trunc((topi + boti)/2);
+        let fm = f(xs[mi]);
+        // console.log(`\t${compare(t, fm)} for [${t}] , [${fm}] (${boti},${topi})`)
+        if (compare(t, fm) > 0) boti = mi;
+        else topi = mi;
     }
 
     // we do a small stride at the end for perf
     // (also to avoid worrying about rounding issues)
-    for (let i = boti; i <= topi; i++)
-        if (f(xs[i]) == t)
+    for (let i = boti; i <= topi; i++) {
+        // console.log(`\tcheck [${i}] ${f(xs[i])} == ${t} (${xs[i]})`)
+        if (compare(f(xs[i]), t) == 0)
             return i;
+    }
 
     return null;
 }
@@ -45,7 +49,7 @@ class Tokenizer {
     constructor(
         tokenizer_path: string,
         readonly vocab_size: number
-    ) {
+    ) {    
         this.vocab = [];
         this.vocab_scores = new Float32Array(this.vocab_size);
         this.sorted_vocab = [];
@@ -78,18 +82,21 @@ class Tokenizer {
         
             const view = new DataView(data.buffer);
             this.vocab_scores[i] = view.getFloat32(0 * 4, true); 
-            console.log(`score = ${this.vocab_scores[i]}`);
+            //console.log(`\tscore = ${this.vocab_scores[i]} vs ${view.getFloat32(0 * 4, true)} vs ${view.getFloat32(0 * 4, false)}`);
             
             const len = view.getInt32(1 * 4, true);
-            console.log(`len = ${len}`);
+            //console.log(`\tlen = ${len}`);
 
             const vocab_data = new Uint8Array(len);
-            bytes_read = fs.readSync(f, vocab_data, len, 1, position);
+            bytes_read = fs.readSync(f, vocab_data, 0, len, position);
             if (bytes_read != len)
                 throw "ERROR";
             position += bytes_read;
 
 	        this.vocab[i] = (new TextDecoder("utf-8")).decode(vocab_data);
+
+            //if (i < 500)
+            //    console.log(`\t(tokenizer) vocab[${i}] = ${this.vocab[i]} (score = ${this.vocab_scores[i]})`)
         }
     }
     static compare_bytes(a:number[], b:number[]): number {
@@ -124,6 +131,8 @@ class Tokenizer {
                     bytes: Tokenizer.bytes_from_str(this.vocab[i]),
                     id: i,
                 };
+                //console.log(Tokenizer.bytes_from_str(this.vocab[i]));
+                //console.log();
             }
 
             this.sorted_vocab.sort((x,y) => Tokenizer.compare_bytes(x.bytes, y.bytes));
@@ -141,9 +150,13 @@ class Tokenizer {
         // energy to read more of the sentencepiece code to figure out what it's doing
         // TODO: (gabe) what is he talking about?
         if (text.length > 0) {
+            console.log(`target = ${[" ".charCodeAt(0)]}`)
             let dummy_prefix = this.str_lookup(
-	        [" ".charCodeAt(0)]
-	    );
+                [" ".charCodeAt(0)]
+            );
+            console.log(`got ${dummy_prefix}`)
+            for (let i  = 0; i < 50; i++)
+                console.log(`sorted vocab = ${this.sorted_vocab[i].bytes}`)
             tokens.push(dummy_prefix);
         }
 
@@ -177,6 +190,7 @@ class Tokenizer {
             buffer = [];
         }
 
+        console.log(`before merge = ${tokens}`)
         while (true) {
             let best_score = -1e10;
             let best_id = -1;
@@ -208,6 +222,8 @@ class Tokenizer {
             // merge consecutive pair into new token
             tokens[best_idx] = best_id;
             tokens.splice(best_idx+1, 1);
+
+            console.log(`after merge = ${tokens}`)
         }
 
         // optional EOS (</s>) token
@@ -216,6 +232,7 @@ class Tokenizer {
         return tokens;
     }
     decode(prev_token: number, token: number): string {
+        //console.log(`decoding token=${token} (prev=${prev_token})`)
         let piece: string = this.vocab[token];
 
         // following BOS, sentencepiece decoder strips any leading whitespace
@@ -246,6 +263,11 @@ function rmsnorm(
     x: Float32Array,
     weight: Float32Array
 ) {
+    if (out.length != x.length || weight.length != x.length) {
+        console.log(`out=${out.length} weight=${weight.length} x=${x.length}`);
+        throw new Error("BAD rmsnorm");
+    }
+
     let ss = 0.0;
     for (const xi of x)
         ss += xi * xi;
@@ -282,6 +304,11 @@ function vecmatmul(
 ) {
     const n = x.length;
     const m = out.length;
+    if (M.length != out.length * x.length) {
+        console.log(`n=${n} M=${M.length} m=${m}`);
+        throw new Error("BAD matmul");
+    }
+
     for (let i = 0; i < m; i++) {
         let val = 0.0;
         for (let j = 0; j < n; j++)
@@ -295,6 +322,10 @@ function view(
     start: number,
     size: number,
 ): Float32Array {
+    if (!Number.isInteger(start) || !Number.isInteger(size)) {
+        console.log(`view(start=${start}, size=${size})`);
+        throw "ERROR: not integer passed to view";
+    }
     return x.subarray(start, start+size);
 }
 
@@ -314,15 +345,15 @@ interface Config {
 interface Weights {
     // stores the embedding for each token
     token_embedding_table: Float32Array; // ()
-
     rms_att: Float32Array; // (n_layers, dim)
-    rms_ffn: Float32Array;
 
     // multi-head attention
     query: Float32Array; // (n_layers, dim, n_heads * head_size)
     key: Float32Array;   // (n_layers, dim, n_kv_heads * head_size)
     value: Float32Array;
     output: Float32Array;
+
+    rms_ffn: Float32Array;
 
     ffn1: Float32Array;
     ffn2: Float32Array;
@@ -351,6 +382,9 @@ interface RuntimeBuffers {
 };
 
 class FileLoader {
+    static CONFIG_NUM_ELEMENTS = 7;
+    static CONFIG_NUM_BYTES = FileLoader.CONFIG_NUM_ELEMENTS * 4;
+
     readonly f: number;
 
     constructor (checkpoint_path: string) {
@@ -360,12 +394,9 @@ class FileLoader {
     }
 
     load_config(): Config {
-        const CONFIG_NUM_ELEMENTS = 7;
-        const CONFIG_NUM_BYTES = CONFIG_NUM_ELEMENTS * 4;
-
-        const data = new Uint8Array(CONFIG_NUM_BYTES);
-        const bytes_read = fs.readSync(this.f, data, 0, CONFIG_NUM_BYTES, 0);
-        if (bytes_read != CONFIG_NUM_BYTES)
+        const data = new Uint8Array(FileLoader.CONFIG_NUM_BYTES);
+        const bytes_read = fs.readSync(this.f, data, 0, FileLoader.CONFIG_NUM_BYTES, 0);
+        if (bytes_read != FileLoader.CONFIG_NUM_BYTES)
             throw "ERROR: failed to read config"
 
         const view = new DataView(data.buffer);
@@ -387,27 +418,26 @@ class FileLoader {
     load_weights(config: Config): Weights {
         const dim = config.dim;
         const head_size = dim / config.n_heads;
-        console.assert(config.n_heads * head_size == dim);
+        if (config.n_heads * head_size != dim)
+            throw "ERROR in load_weights"
 
         let weights: Weights = {
-            token_embedding_table: new Float32Array(
-                config.vocab_size * config.dim 
-            ),
-
+            token_embedding_table: new Float32Array(dim * config.vocab_size),
             rms_att: new Float32Array(config.n_layers * dim),
-            rms_ffn: new Float32Array(config.n_layers * dim),
     
             query: new Float32Array(config.n_layers * dim * dim),
             key: new Float32Array(config.n_layers * dim * config.n_kv_heads * head_size),
             value: new Float32Array(config.n_layers * dim * config.n_kv_heads * head_size),
             output: new Float32Array(config.n_layers * dim * dim),
 
+            rms_ffn: new Float32Array(config.n_layers * dim),
+
             ffn1: new Float32Array(config.n_layers * config.hidden_dim * dim),
             ffn2: new Float32Array(config.n_layers * dim * config.hidden_dim),
             ffn3: new Float32Array(config.n_layers * config.hidden_dim * dim),
 
             rms_final: new Float32Array(dim),
-            classify: new Float32Array(dim * config.vocab_size)
+            classify: new Float32Array(dim * config.vocab_size),
         };  
   
         let readIntoBuffer = (
@@ -415,25 +445,43 @@ class FileLoader {
         ) => {
             return fs.readSync(this.f, buff, 0, buff.length, position);
         }
-        
-        let position = 0;
+    
+        let position = FileLoader.CONFIG_NUM_BYTES;
         position += readIntoBuffer(weights.token_embedding_table, position);
         position += readIntoBuffer(weights.rms_att, position);
-        position += readIntoBuffer(weights.rms_ffn, position);
 
         position += readIntoBuffer(weights.query, position);
         position += readIntoBuffer(weights.key, position);
         position += readIntoBuffer(weights.value, position);
         position += readIntoBuffer(weights.output, position);
 
+        position += readIntoBuffer(weights.rms_ffn, position);
+
         position += readIntoBuffer(weights.ffn1, position);
         position += readIntoBuffer(weights.ffn2, position);
         position += readIntoBuffer(weights.ffn3, position);
     
         position += readIntoBuffer(weights.rms_final, position);
-        position += readIntoBuffer(weights.classify, position);
+        position += config.seq_len * (head_size / 2); // skip freq_cis_real
+        position += config.seq_len * (head_size / 2); // skip freq_cis_imag
+
+        // TODO: what is the purpose of shared weights?
+        if (config.shared_weights) {
+            weights.classify.set(weights.token_embedding_table);
+        } else {
+            position += readIntoBuffer(weights.classify, position);
+        }
 
         return weights; 
+    }
+}
+
+function does_not_contain_nan(x:any) {
+    for (let i = 0; i < x.length; i++) {
+        if (Number.isNaN(x[i])) {
+            console.log(`(x) FOUND NAN at ${i} (pre-rmsnorm)`)
+            throw "FOUND NAN"
+        }
     }
 }
 
@@ -453,11 +501,11 @@ class Transformer {
             xb2: new Float32Array(config.dim),
             hb: new Float32Array(config.hidden_dim),
             hb2: new Float32Array(config.hidden_dim),
-             
+
             q: new Float32Array(config.dim),
 
             att: new Float32Array(config.n_heads * config.seq_len),
-            logits: new Float32Array(config.dim * config.vocab_size),
+            logits: new Float32Array(config.vocab_size),
 
             key_cache: new Float32Array(
                 config.n_layers * config.seq_len * kv_dim
@@ -486,7 +534,7 @@ class Transformer {
         let xb2 = this.b.xb2;
         let hb = this.b.hb;
         let hb2 = this.b.hb2;
-            
+    
 	    x.set(view(
             this.weights.token_embedding_table,
             token * dim, 
@@ -494,6 +542,7 @@ class Transformer {
         ));
 
         for (let layer_i = 0; layer_i < this.config.n_layers; layer_i++) {
+            //console.log(`\tstarting layer ${layer_i}...`)
             rmsnorm(
                 xb,
                 x,
@@ -529,9 +578,9 @@ class Transformer {
                 let val = position * freq;
 
                 // how many vectors? 2 = q & k, 1 = q only
-                let rotn = (i < kv_dim ? 2 : 1);
+                let rotn = (i < kv_dim) ? 2 : 1;
                 for (let v = 0; v < rotn; v++) {
-                    let vec = (v == 0 ? query : key);
+                    let vec = (v == 0) ? query : key;
                     let v0 = vec[i];
                     let v1 = vec[i+1];
                     // repr each two elems as the mag of a rotated vector
@@ -542,7 +591,6 @@ class Transformer {
 
             // multihead attention
             for (let hi = 0; hi < this.config.n_heads; hi++) {
-                // vecs for curr head
                 let q   = view(this.b.q, hi * head_size, head_size);
                 let att = view(this.b.att, hi * seq_len, seq_len);
 
@@ -557,8 +605,8 @@ class Transformer {
                     let score = 0.0;
                     for (let i = 0; i < head_size; i++) {
                         score += q[i] * k[i];
-                        att[ti] = score / Math.sqrt(head_size);
                     }
+                    att[ti] = score / Math.sqrt(head_size); // TODO: why this?
                 }
 
                 // softmax scores to get attention weights
@@ -566,12 +614,12 @@ class Transformer {
     
                 // weighted sum of the values, store back into x
                 let xb = view(this.b.xb, hi * head_size, head_size);
-                xb.fill(0, 0, head_size);
-                for (let t = 0; t <= position; t++) {
+                xb.fill(0);
+                for (let ti = 0; ti <= position; ti++) {
                     // get value vec for this head and timestep
                     let v = view(
                         this.b.value_cache,
-                        layer_off + t * kv_dim + (hi / kv_mul) * head_size,
+                        layer_off + ti * kv_dim + Math.trunc(hi / kv_mul) * head_size,
                         head_size
                     );
 
@@ -581,7 +629,7 @@ class Transformer {
 
                     // separate heads get concatenated
                     for (let i = 0; i < head_size; i++)
-                        xb[i] += att[t] * v[i];
+                        xb[i] += att[ti] * v[i];
                 }
             }
 
@@ -593,7 +641,7 @@ class Transformer {
             );
 
             // residual connection
-            for (let i = 0; i < dim; i++)
+            for (let i = 0; i < x.length; i++)
                 x[i] += xb2[i];
 
             rmsnorm(
@@ -613,7 +661,7 @@ class Transformer {
                 xb
             );
             vecmatmul(
-                xb2,
+                hb2,
                 view(
                     this.weights.ffn3,
                     layer_i * dim * hidden_dim,
@@ -632,6 +680,13 @@ class Transformer {
                 hb[i] = val;
             }
 
+            for (let i = 0; i < hb.length; i++) {
+                if (Number.isNaN(hb[i])) {
+                    console.log(`(hb) FOUND NAN at ${i}`)
+                    break;
+                }
+            }
+
             // last matmul: w2 @ ...
             vecmatmul(
                 xb,
@@ -643,15 +698,29 @@ class Transformer {
                 hb
             );
 
+            for (let i = 0; i < xb.length; i++) {
+                if (Number.isNaN(xb[i])) {
+                    console.log(`(xb) FOUND NAN at ${i}`)
+                    break;
+                }
+            }
+
             // residual connection
             for (let i = 0; i < dim; i++)
                 x[i] += xb[i];
         }
 
+        //console.log("rms norm...")
         rmsnorm(x, x, this.weights.rms_final);
+        does_not_contain_nan(x);
+        does_not_contain_nan(this.weights.classify);
+        does_not_contain_nan(this.b.logits);
 
         // classifier into logits
+        // console.log("classifier...")
         vecmatmul(this.b.logits, this.weights.classify, x);
+        does_not_contain_nan(this.b.logits);
+
         return this.b.logits;
     }
 }
@@ -705,9 +774,12 @@ class Sampler {
 
         let prob_index: ProbIndex[] = [];
 
+        //console.log(`coin = ${coin}`)
+        //console.log(`probs.length = ${probs.length}`)
+
         // sort indices in descending order of probabilities, then remove all
         // values smaller than (1 - topp) / (n - 1)
-        const cutoff = (1.0-this.topp) / (probs.length - 1);
+        const cutoff = (1.0 - this.topp) / (probs.length - 1);
         for (let i = 0; i < probs.length; i++) {
             if (probs[i] >= cutoff) {
                 prob_index.push({
@@ -717,6 +789,8 @@ class Sampler {
             }
 	    }
 	
+        //console.log(`prob_index.length = ${prob_index.length}`)
+
         prob_index.sort(x => x.prob);
 
         let cumulative_prob = 0.0;
@@ -738,6 +812,7 @@ class Sampler {
                 return prob_index[i].index;
         }
 
+        console.log(`last_i = ${last_i}`)
         return prob_index[last_i].index;
     }
 
@@ -751,8 +826,17 @@ class Sampler {
             for (let qi = 0; qi < logits.length; qi++)
                 logits[qi] /= this.temperature;
 
+            //console.log(`logits after temp = ${logits.slice(0,100)}...`)
+            for (let i = 0; i < logits.length; i++) {
+                if (Number.isNaN(logits[i])) {
+                    console.log(i);
+                    break;
+                }
+            }
+
             softmax(logits);
 
+            //console.log(`logits after softmax = ${logits.slice(0,100)}...`)
             let coin = Math.random();
             if (this.topp <= 0 || this.topp >= 1) {
                 // sample from the predicted probability distribution
@@ -769,20 +853,23 @@ class Sampler {
 function generate_response(prompt: string): string {
     const checkpoint_path = "data/models/stories15M.bin"; // "llama2/llama-2-7b-chat/params.json"
     const tokenizer_path = "data/tokenizer.bin";
-    const temperature = 1.0;
-    const topp = 0.9;
-    const steps = 256;
+    const temperature = 0.5; // 1.0
+    const topp = 1.0;
+    const steps = 64;
 
     const fileLoader = new FileLoader(checkpoint_path);
     const config = fileLoader.load_config();
     console.log(`config = ${JSON.stringify(config, null, 2)}`);
 
+    console.log("loading Transformer...");
     const transformer = new Transformer(
         config,
         fileLoader.load_weights(config),
         Transformer.create_buffers(config)
     );
+    console.log("loading Tokenizer...");
     const tokenizer = new Tokenizer(tokenizer_path, config.vocab_size);
+    console.log("loading Sampler...");
     const sampler = new Sampler(temperature, topp);
     
     let prompt_tokens = tokenizer.encode(
@@ -790,21 +877,29 @@ function generate_response(prompt: string): string {
     if (prompt_tokens.length < 1)
         throw "ERROR: too few tokens"
 
+    console.log(`prompt_tokens = ${prompt_tokens}`)
+
+    let response: string = "";
+
     let i = 0;
     let next_token: number; // will store the next token in the sequence
     let token = prompt_tokens[i];
     while (i < steps) {
+        console.log(`passing in token ${i} (.id = ${token}) (${tokenizer.decode(BOS, token)})`);
         let logits = transformer.forward(token, i);
 
-        // advance the state machine
+        //console.log("start sampling...")
         if (i < prompt_tokens.length - 1) {
             // if we are still processing the input prompt, force the next prompt toke
             next_token = prompt_tokens[i + 1];
         } else {
             // otherwise sample the next token from the logits
+            // console.log(`logits = ${logits.slice(0,100)}...`)
             next_token = sampler.sample(logits);
         }
 
+        //console.log(`got next_token = ${next_token} ()`)
+        //console.log("done sampling...")
         i += 1;
 
         // terminating condition:BOS (=1) token delimits sequences
@@ -812,14 +907,12 @@ function generate_response(prompt: string): string {
 
         // print the token as string, decode it with the Tokenizer object
         let piece = tokenizer.decode(token, next_token);
-        console.log(piece);
+        response += piece;
         
         token = next_token;
     }
 
-    console.log();
-
-    return "NOT YET IMPLEMENTED";
+    return response;
 }
 
 import readline from 'readline';

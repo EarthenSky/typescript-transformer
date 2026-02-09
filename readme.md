@@ -2,11 +2,11 @@
 
 ## setup
 - node 24.13 w/ yarn -> https://nodejs.org/en/download
-- `yarn install`
-- `yarn build`
 - download `tokenizer.bin` into `./data`
 - download your model into `./data/models`. Feel free to try `wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories15M.bin`
-- `node dist/main.js`
+- `yarn install`
+- `yarn build`
+- `yarn start`
 
 ## how to download weights
 - go to meta website, the dropdown has llama2. You'll have to run their script download.sh, passing in the URL you were provided.

@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "rootDir": ".",
-    "outDir": "./dist",
+    "outDir": "dist",
     
     "target": "esnext",
     "module": "nodenext",
@@ -12,6 +12,7 @@
     // and npm install -D @types/node
 
     "sourceMap": true,
+    "inlineSources": true,
     "declaration": true,
     "declarationMap": true,
 

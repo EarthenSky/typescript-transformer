@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "yarn tsc",
-    "start": "node dist/main.js"
+    "release": "node dist/main.js",
+    "start": "node --enable-source-maps dist/main.js"
   }
 }
