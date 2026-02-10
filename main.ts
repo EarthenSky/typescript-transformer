@@ -122,7 +122,7 @@ class Tokenizer {
     encode(
         text: string, bos: boolean, eos: boolean
     ): number[] {
-        if (text == "") throw "text cannot be empty";
+        // if (text == "") throw "text cannot be empty";
 
         if (this.sorted_vocab.length == 0) {
             // lazily alloc and sort the vocabulary
@@ -139,7 +139,8 @@ class Tokenizer {
         }
 
         // merge candidate buffer
-        let buffer: number[] = [];
+     
+  let buffer: number[] = [];
         let tokens: number[] = [];
 
         // optional BOS (<s>) token
@@ -160,19 +161,23 @@ class Tokenizer {
             tokens.push(dummy_prefix);
         }
 
+        let text_bytes = new TextEncoder().encode(text);
+
         // process the raw (UTF-8) byte sequence of the input string
-        for (let ci = 0; ci < text.length; ci++) {
+        for (let ci = 0; ci < text_bytes.length; ci++) {
             // reset buffer if the current byte is ASCII or a leading byte
             // in UTF-8, all continuation bytes start with "10" in first two bits
-            if ((text.charCodeAt(ci) & 0xC0) != 0x80)
+            if ((text_bytes[ci] & 0xC0) != 0x80)
                 // this must be a leading byte (11...) or an ASCII char (0x...)
                 buffer = [];
 
-            buffer.push(text.charCodeAt(ci));
+            buffer.push(text_bytes[ci]);
 
-            // while the next character is a continuation byte, append
+            // continue while the next character is a continuation byte
             if (
-                (text.charCodeAt(ci+1) & 0xC0) == 0x80 && buffer.length < 4
+                (ci+1) < text_bytes.length
+                && (text_bytes[ci+1] & 0xC0) == 0x80
+                && buffer.length < 4
             )
                 continue;
 
@@ -273,11 +278,13 @@ function rmsnorm(
         ss += xi * xi;
     ss /= x.length;
     ss += 1e-5; // avoid LARGE ss after 1/x
-
     ss = 1.0 / Math.sqrt(ss);
+
     for (let i = 0; i < out.length; i++)
         out[i] = weight[i] * ss * x[i];
 }
+
+var fi = 0;
 
 function softmax(x: Float32Array) {
     let max_val = x[0];
@@ -295,6 +302,12 @@ function softmax(x: Float32Array) {
 
     for (let i = 0; i < x.length; i++)
         x[i] /= sum;
+
+    fs.writeFileSync(`softmax.${fi}.data`,
+        new Uint8Array(x.buffer, x.byteOffset, x.byteLength),
+        { flag: "w" }
+    );
+    fi += 1;
 }
 
 function vecmatmul(
@@ -315,6 +328,12 @@ function vecmatmul(
             val += x[j] * M[i * n + j];
         out[i] = val;
     }
+
+    fs.writeFileSync(`matmul.out.${fi}.data`,
+        new Uint8Array(out.buffer, out.byteOffset, out.byteLength),
+        { flag: "w" }
+    );
+    fi += 1;
 }
 
 function view(
@@ -443,7 +462,7 @@ class FileLoader {
         let readIntoBuffer = (
             buff: Float32Array, position: number
         ) => {
-            return fs.readSync(this.f, buff, 0, buff.length, position);
+            return fs.readSync(this.f, buff, 0, 4* buff.length, position);
         }
     
         let position = FileLoader.CONFIG_NUM_BYTES;
@@ -519,6 +538,7 @@ class Transformer {
     }
 
     forward(token: number, position: number): Float32Array  {
+        console.log(`forward(token ${token}, position ${position})`);
         // size of query vector
         const dim = this.config.dim;       
         const hidden_dim = this.config.hidden_dim;
@@ -535,19 +555,26 @@ class Transformer {
         let hb = this.b.hb;
         let hb2 = this.b.hb2;
     
-	    x.set(view(
+	x.set(view(
             this.weights.token_embedding_table,
             token * dim, 
             dim
         ));
 
+        console.log(`x = ${x[0]} ${x[1]} ${x[2]} ${x[3]}`);
         for (let layer_i = 0; layer_i < this.config.n_layers; layer_i++) {
             //console.log(`\tstarting layer ${layer_i}...`)
+            // TODO: something is wrong with this rmsnorm?
+            console.log(this.weights.rms_att[0]);
+
             rmsnorm(
                 xb,
                 x,
                 view(this.weights.rms_att, layer_i * dim, dim)
             );
+
+            console.log(`xb (layer ${layer_i}) = ${xb[0]} ${xb[1]} ${xb[2]} ${xb[3]}`);
+
            
             // key and value point to the kv cache
             const layer_off = layer_i * this.config.seq_len * kv_dim;
@@ -752,7 +779,7 @@ class Sampler {
 
     sample_mult(
         probs: Float32Array,
-	    coin: number,
+	coin: number,
     ): number {
         // probabilities must sum to 1 !
         let cdf = 0.0;
@@ -770,7 +797,7 @@ class Sampler {
     ): number {
         // top-p sampling (or "nucleus sampling") samples from the smallest set of
         // tokens that exceed probability topp. This way we never sample tokens that
-	    // have very low probabilities and are less likely to go "off the rails".
+	// have very low probabilities and are less likely to go "off the rails".
 
         let prob_index: ProbIndex[] = [];
 
@@ -787,11 +814,11 @@ class Sampler {
                     prob: probs[i],
                 });
             }
-	    }
+	}
 	
         //console.log(`prob_index.length = ${prob_index.length}`)
-
-        prob_index.sort(x => x.prob);
+        // max sort, so we select largest prob events first
+        prob_index.sort((x,y) => y.prob - x.prob);
 
         let cumulative_prob = 0.0;
         let last_i = prob_index.length - 1; 
@@ -812,7 +839,6 @@ class Sampler {
                 return prob_index[i].index;
         }
 
-        console.log(`last_i = ${last_i}`)
         return prob_index[last_i].index;
     }
 
@@ -855,7 +881,7 @@ function generate_response(prompt: string): string {
     const tokenizer_path = "data/tokenizer.bin";
     const temperature = 0.5; // 1.0
     const topp = 1.0;
-    const steps = 64;
+    const steps = 128;
 
     const fileLoader = new FileLoader(checkpoint_path);
     const config = fileLoader.load_config();
@@ -877,7 +903,11 @@ function generate_response(prompt: string): string {
     if (prompt_tokens.length < 1)
         throw "ERROR: too few tokens"
 
+    // encode & decode seem to be working properly
     console.log(`prompt_tokens = ${prompt_tokens}`)
+    for (let i = 0; i < prompt_tokens.length; i++) {
+        console.log(`-> ${tokenizer.decode(BOS, prompt_tokens[i])}`);
+    }
 
     let response: string = "";
 
