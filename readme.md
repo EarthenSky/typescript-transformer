@@ -1,25 +1,46 @@
 # typescript transformer
 
 ## setup
-- node 24.13 w/ yarn -> https://nodejs.org/en/download
+- install node 24.13 w/ yarn -> https://nodejs.org/en/download
 - download `tokenizer.bin` into `./data`
-- download your model into `./data/models`. Feel free to try `wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories15M.bin`
+- download your model into `./data/models`
+  - A small model for stories `wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories42M.bin`
+  - A larger chat model ``
 - `yarn install`
 - `yarn build`
-- `yarn start`
+- `yarn start --checkpoint_path=data/models/stories42M.bin`
+
+## notes
+- This implementation is heavily derived from llama2.c and is only 20-30% slower.
+- For the chat model, input your text like `[INST] <<SYS>>\nYou are a lovely human being.\n<</SYS>>\n\nWhat is the third best colour? [/INST]`
+## Performance
+
+|       | us        | llama2.c |
+| ----- | --------- | -------- |
+| 15M   | 50.1 tps  | 77.9 tps |
+| 42M   | 19.3 tps  | 25.9 tps |
+| 7000M | 
 
 ## how to download weights
-- go to meta website, the dropdown has llama2. You'll have to run their script download.sh, passing in the URL you were provided.
-- Oh, there are some weaker weights at https://huggingface.co/karpathy/tinyllamas/resolve/main/stories15M.bin
+- Go to meta website, the dropdown has llama2. You'll have to run their script download.sh, passing in the URL you were provided.
 
-## todo
-- where are llama2's weights?
-  - provided by meta
-- what is the structure of llama2?
-  - info in the model card https://github.com/meta-llama/llama/blob/main/MODEL_CARD.md
-  - I guess the paper has some helpful details around section 2.2, but it's generally not clear where the weights come from unless you use llama2.c?
-    - https://arxiv.org/pdf/2307.09288
-  - https://github.com/meta-llama/llama/blob/main/llama/model.py
-- how are tokens tokenized / de-tokenized?
-  - https://github.com/meta-llama/llama/blob/main/llama/tokenizer.py
-- How to get llama2 7B to work with our arch?
+## misc
+- llama2 resources
+  - https://github.com/meta-llama/llama/blob/main/MODEL_CARD.md
+  - mostly unhelpful https://arxiv.org/pdf/2307.09288
+  - very helpful! https://github.com/meta-llama/llama/blob/main/llama/model.py
+  - for tokenization https://github.com/meta-llama/llama/blob/main/llama/tokenizer.py
+- download llama2 weights
+  - https://www.llama.com/llama-downloads/
+  - follow steps
+  - `python -m pip install llama-models`
+  - `python -m pip install llama-stack`
+  - `llama model download --source meta --model-id Llama-2-7b-chat`
+    - will probably take 5 minutes or so
+  - paste your link into the command
+  - wait for the download to complete
+  - `git clone https://github.com/karpathy/llama2.c`
+  - `cd llama2.c`
+  - `python -m pip install -r .\requirements.txt`
+  - `python export.py llama2_7b_chat.bin --meta-llama ${your-path}/Llama-2-7b-chat`
+    - will probably take 25+ minutes

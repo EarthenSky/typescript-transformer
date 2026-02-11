@@ -128,7 +128,6 @@ class Tokenizer {
         }
 
         // merge candidate buffer
-     
         let buffer: number[] = [];
         let tokens: number[] = [];
 
@@ -225,8 +224,8 @@ class Tokenizer {
         if (prev_token == BOS && piece[0] == " ")
             piece = piece.slice(1);
 
-        // careful, some tokens designate raw bytes, and look like e.g. '<0x01>'
-        // parse this and convert and return the actual byte
+        // some tokens designate raw bytes, and look like <0x01>
+        // parse this & return the byte
         let is_raw_bytes =
             (piece.length > 4)
             && piece[0] == "<"
@@ -259,6 +258,7 @@ function rmsnorm(
     let ss = 0.0;
     for (const xi of x)
         ss += xi * xi;
+
     ss /= x.length;
     ss += 1e-5; // avoid LARGE ss after 1/x
     ss = 1.0 / Math.sqrt(ss);
@@ -332,7 +332,7 @@ interface Config {
 }
 interface Weights {
     // stores the embedding for each token
-    token_embedding_table: Float32Array; // ()
+    token_embedding_table: Float32Array; // (dim, vocab_size)
     rms_att: Float32Array; // (n_layers, dim)
 
     // multi-head attention
@@ -523,7 +523,7 @@ class Transformer {
         let hb = this.b.hb;
         let hb2 = this.b.hb2;
     
-	x.set(view(
+	    x.set(view(
             this.weights.token_embedding_table,
             token * dim, 
             dim
@@ -633,8 +633,7 @@ class Transformer {
                 x[i] += xb2[i];
 
             rmsnorm(
-                xb,
-                x,
+                xb, x,
                 view(this.weights.rms_ffn, layer_i * dim, dim)
             );
 
@@ -668,13 +667,6 @@ class Transformer {
                 hb[i] = val;
             }
 
-            for (let i = 0; i < hb.length; i++) {
-                if (Number.isNaN(hb[i])) {
-                    console.log(`(hb) FOUND NAN at ${i}`)
-                    break;
-                }
-            }
-
             // last matmul: w2 @ ...
             vecmatmul(
                 xb,
@@ -686,22 +678,12 @@ class Transformer {
                 hb
             );
 
-            for (let i = 0; i < xb.length; i++) {
-                if (Number.isNaN(xb[i])) {
-                    console.log(`(xb) FOUND NAN at ${i}`)
-                    break;
-                }
-            }
-
             // residual connection
             for (let i = 0; i < dim; i++)
                 x[i] += xb[i];
         }
 
         rmsnorm(x, x, this.weights.rms_final);
-        does_not_contain_nan(x);
-        does_not_contain_nan(this.weights.classify);
-        does_not_contain_nan(this.b.logits);
 
         // classifier into logits
         vecmatmul(this.b.logits, this.weights.classify, x);
@@ -738,7 +720,7 @@ class Sampler {
 
     sample_mult(
         probs: Float32Array,
-	coin: number,
+	    coin: number,
     ): number {
         // probabilities must sum to 1 !
         let cdf = 0.0;
@@ -756,10 +738,9 @@ class Sampler {
     ): number {
         // top-p sampling (or "nucleus sampling") samples from the smallest set of
         // tokens that exceed probability topp. This way we never sample tokens that
-	// have very low probabilities and are less likely to go "off the rails".
+	    // have very low probabilities and are less likely to go "off the rails".
 
         let prob_index: ProbIndex[] = [];
-
 
         // sort indices in descending order of probabilities, then remove all
         // values smaller than (1 - topp) / (n - 1)
@@ -771,7 +752,7 @@ class Sampler {
                     prob: probs[i],
                 });
             }
-	}
+	    }
 	
         // max sort, so we select largest prob events first
         prob_index.sort((x,y) => y.prob - x.prob);
@@ -808,13 +789,7 @@ class Sampler {
             for (let qi = 0; qi < logits.length; qi++)
                 logits[qi] /= this.temperature;
 
-            for (let i = 0; i < logits.length; i++) {
-                if (Number.isNaN(logits[i])) {
-                    console.log(i);
-                    break;
-                }
-            }
-
+            // does_not_contain_nan(logits);
             softmax(logits);
 
             let coin = Math.random();
@@ -822,7 +797,6 @@ class Sampler {
                 // sample from the predicted probability distribution
                 next = this.sample_mult(logits, coin);
             } else {
-                // top-p sampling clamps lowest to zero
                 next = this.sample_topp(logits, coin);
             }
         }
@@ -830,16 +804,18 @@ class Sampler {
     }
 }
 
-function generate_response(prompt: string): string {
-    const checkpoint_path = "data/models/stories15M.bin"; // "llama2/llama-2-7b-chat/params.json"
-    const tokenizer_path = "data/tokenizer.bin";
-    const temperature = 0.5; // 1.0
-    const topp = 1.0;
-    const steps = 128;
+interface InputParameters {
+    checkpoint_path: string;
+    tokenizer_path: string;
+    temperature: number;
+    topp: number;
+    max_steps: number;
+};
 
-    const fileLoader = new FileLoader(checkpoint_path);
+function generate_response(params: InputParameters, prompt: string): string {
+    const fileLoader = new FileLoader(params.checkpoint_path);
     const config = fileLoader.load_config();
-    console.log(`config = ${JSON.stringify(config, null, 2)}`);
+    console.log(`\nconfig = ${JSON.stringify(config, null, 2)}\n`);
 
     console.log("loading Transformer...");
     const transformer = new Transformer(
@@ -847,10 +823,12 @@ function generate_response(prompt: string): string {
         fileLoader.load_weights(config),
         Transformer.create_buffers(config)
     );
+
     console.log("loading Tokenizer...");
-    const tokenizer = new Tokenizer(tokenizer_path, config.vocab_size);
+    const tokenizer = new Tokenizer(params.tokenizer_path, config.vocab_size);
+    
     console.log("loading Sampler...");
-    const sampler = new Sampler(temperature, topp);
+    const sampler = new Sampler(params.temperature, params.topp);
     
     let prompt_tokens = tokenizer.encode(
         prompt, true, false);
@@ -858,42 +836,73 @@ function generate_response(prompt: string): string {
         throw "ERROR: too few tokens"
 
     // encode & decode seem to be working properly
-    console.log(`prompt_tokens = ${prompt_tokens}`)
+    console.log("\nPrompt Tokens")
+    console.log(prompt_tokens.toString())
     for (let i = 0; i < prompt_tokens.length; i++) {
-        console.log(`=> ${tokenizer.decode(BOS, prompt_tokens[i])}`);
+        console.log(`[${i}]\t${tokenizer.decode(BOS, prompt_tokens[i])}`);
     }
+    console.log()
 
+    let start_time_ms = Date.now();
     let response: string = "";
 
     let i = 0;
     let next_token: number; // will store the next token in the sequence
     let token = prompt_tokens[i];
-    while (i < steps) {
-        console.log(`\nForward on tok${i} (.id = ${token}) (${tokenizer.decode(BOS, token)})`);
+    while (i < params.max_steps) {
         let logits = transformer.forward(token, i);
 
         if (i < prompt_tokens.length - 1) {
-            // if we are still processing the input prompt, force the next prompt toke
             next_token = prompt_tokens[i + 1];
         } else {
-            // otherwise sample the next token from the logits
             next_token = sampler.sample(logits);
         }
 
         i += 1;
 
-        // terminating condition:BOS (=1) token delimits sequences
+        // terminating condition: BOS (=1) token delimits sequences
         if (next_token == 1) { break; }
 
         // print the token as string, decode it with the Tokenizer object
         let piece = tokenizer.decode(token, next_token);
         response += piece;
+        process.stdout.write(piece);
         
         token = next_token;
     }
+    
+    console.log("\n\nStats:");
+    console.log(`${(1000 * i / (Date.now() - start_time_ms)).toFixed(1)}\ttps`);
+    console.log(`${i}\ttokens`);
+    console.log(`${params.temperature}\ttemperature`);
+    console.log(`${params.topp}\ttopp`);
 
     return response;
 }
+
+let params: InputParameters = {
+    checkpoint_path: "data/models/stories15M.bin", // "llama2/llama-2-7b-chat/params.json"
+    tokenizer_path: "data/tokenizer.bin",
+    temperature: 0.8,
+    topp: 0.9,
+    max_steps: 512,
+};
+
+for (const arg of process.argv.slice(2)) { 
+    if (arg.startsWith("--checkpoint_path")) {
+        params.checkpoint_path = arg.slice("--checkpoint_path=".length);
+    } else if (arg.startsWith("--tokenizer_path")) {
+        params.tokenizer_path = arg.slice("--tokenizer_path=".length);
+    } else if (arg.startsWith("--temperature")) {
+        params.temperature = parseFloat(arg.slice("--temperature=".length));
+    } else if (arg.startsWith("--topp")) {
+        params.topp = parseFloat(arg.slice("--topp=".length));
+    } else if (arg.startsWith("--max_steps")) {
+        params.max_steps = parseInt(arg.slice("--max_steps=".length));
+    }
+}
+
+console.log(`params = ${JSON.stringify(params, null, 2)}`);
 
 import readline from 'readline';
 
@@ -902,6 +911,6 @@ const rl = readline.createInterface({
     output: process.stdout,
 });
 rl.question("Prompt: ", (prompt: string) => {
-    console.log(`Response:\n\n${generate_response(prompt)}`);
+    console.log(`\nResponse:\n\n${generate_response(params, prompt)}\n`);
     rl.close();
 });
