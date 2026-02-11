@@ -10,11 +10,9 @@ function bsearch<T, U>(
     let topi = xs.length - 1;
     let boti = 0;
 
-    // console.log(`\tbsearch :: (${boti},${topi})`)
     while ((topi - boti) > 4) {
         let mi = Math.trunc((topi + boti)/2);
         let fm = f(xs[mi]);
-        // console.log(`\t${compare(t, fm)} for [${t}] , [${fm}] (${boti},${topi})`)
         if (compare(t, fm) > 0) boti = mi;
         else topi = mi;
     }
@@ -22,7 +20,6 @@ function bsearch<T, U>(
     // we do a small stride at the end for perf
     // (also to avoid worrying about rounding issues)
     for (let i = boti; i <= topi; i++) {
-        // console.log(`\tcheck [${i}] ${f(xs[i])} == ${t} (${xs[i]})`)
         if (compare(f(xs[i]), t) == 0)
             return i;
     }
@@ -82,10 +79,7 @@ class Tokenizer {
         
             const view = new DataView(data.buffer);
             this.vocab_scores[i] = view.getFloat32(0 * 4, true); 
-            //console.log(`\tscore = ${this.vocab_scores[i]} vs ${view.getFloat32(0 * 4, true)} vs ${view.getFloat32(0 * 4, false)}`);
-            
             const len = view.getInt32(1 * 4, true);
-            //console.log(`\tlen = ${len}`);
 
             const vocab_data = new Uint8Array(len);
             bytes_read = fs.readSync(f, vocab_data, 0, len, position);
@@ -94,9 +88,6 @@ class Tokenizer {
             position += bytes_read;
 
 	        this.vocab[i] = (new TextDecoder("utf-8")).decode(vocab_data);
-
-            //if (i < 500)
-            //    console.log(`\t(tokenizer) vocab[${i}] = ${this.vocab[i]} (score = ${this.vocab_scores[i]})`)
         }
     }
     static compare_bytes(a:number[], b:number[]): number {
@@ -131,8 +122,6 @@ class Tokenizer {
                     bytes: Tokenizer.bytes_from_str(this.vocab[i]),
                     id: i,
                 };
-                //console.log(Tokenizer.bytes_from_str(this.vocab[i]));
-                //console.log();
             }
 
             this.sorted_vocab.sort((x,y) => Tokenizer.compare_bytes(x.bytes, y.bytes));
@@ -140,7 +129,7 @@ class Tokenizer {
 
         // merge candidate buffer
      
-  let buffer: number[] = [];
+        let buffer: number[] = [];
         let tokens: number[] = [];
 
         // optional BOS (<s>) token
@@ -151,13 +140,9 @@ class Tokenizer {
         // energy to read more of the sentencepiece code to figure out what it's doing
         // TODO: (gabe) what is he talking about?
         if (text.length > 0) {
-            console.log(`target = ${[" ".charCodeAt(0)]}`)
             let dummy_prefix = this.str_lookup(
                 [" ".charCodeAt(0)]
             );
-            console.log(`got ${dummy_prefix}`)
-            for (let i  = 0; i < 50; i++)
-                console.log(`sorted vocab = ${this.sorted_vocab[i].bytes}`)
             tokens.push(dummy_prefix);
         }
 
@@ -195,7 +180,6 @@ class Tokenizer {
             buffer = [];
         }
 
-        console.log(`before merge = ${tokens}`)
         while (true) {
             let best_score = -1e10;
             let best_id = -1;
@@ -227,8 +211,6 @@ class Tokenizer {
             // merge consecutive pair into new token
             tokens[best_idx] = best_id;
             tokens.splice(best_idx+1, 1);
-
-            console.log(`after merge = ${tokens}`)
         }
 
         // optional EOS (</s>) token
@@ -237,7 +219,6 @@ class Tokenizer {
         return tokens;
     }
     decode(prev_token: number, token: number): string {
-        //console.log(`decoding token=${token} (prev=${prev_token})`)
         let piece: string = this.vocab[token];
 
         // following BOS, sentencepiece decoder strips any leading whitespace
@@ -254,7 +235,9 @@ class Tokenizer {
             && piece[piece.length-1] == ">";
 
         if (is_raw_bytes) {
-            return this.byte_pieces[Number(piece.slice(3, -1))];
+            return this.byte_pieces[
+                parseInt(piece.slice(3, -1), 16)
+            ];
         } else {
             return piece;
         }
@@ -284,8 +267,6 @@ function rmsnorm(
         out[i] = weight[i] * ss * x[i];
 }
 
-var fi = 0;
-
 function softmax(x: Float32Array) {
     let max_val = x[0];
     for (let i = 1; i < x.length; i++) {
@@ -302,12 +283,6 @@ function softmax(x: Float32Array) {
 
     for (let i = 0; i < x.length; i++)
         x[i] /= sum;
-
-    fs.writeFileSync(`softmax.${fi}.data`,
-        new Uint8Array(x.buffer, x.byteOffset, x.byteLength),
-        { flag: "w" }
-    );
-    fi += 1;
 }
 
 function vecmatmul(
@@ -328,12 +303,6 @@ function vecmatmul(
             val += x[j] * M[i * n + j];
         out[i] = val;
     }
-
-    fs.writeFileSync(`matmul.out.${fi}.data`,
-        new Uint8Array(out.buffer, out.byteOffset, out.byteLength),
-        { flag: "w" }
-    );
-    fi += 1;
 }
 
 function view(
@@ -538,7 +507,6 @@ class Transformer {
     }
 
     forward(token: number, position: number): Float32Array  {
-        console.log(`forward(token ${token}, position ${position})`);
         // size of query vector
         const dim = this.config.dim;       
         const hidden_dim = this.config.hidden_dim;
@@ -561,11 +529,7 @@ class Transformer {
             dim
         ));
 
-        console.log(`x = ${x[0]} ${x[1]} ${x[2]} ${x[3]}`);
         for (let layer_i = 0; layer_i < this.config.n_layers; layer_i++) {
-            //console.log(`\tstarting layer ${layer_i}...`)
-            // TODO: something is wrong with this rmsnorm?
-            console.log(this.weights.rms_att[0]);
 
             rmsnorm(
                 xb,
@@ -573,9 +537,6 @@ class Transformer {
                 view(this.weights.rms_att, layer_i * dim, dim)
             );
 
-            console.log(`xb (layer ${layer_i}) = ${xb[0]} ${xb[1]} ${xb[2]} ${xb[3]}`);
-
-           
             // key and value point to the kv cache
             const layer_off = layer_i * this.config.seq_len * kv_dim;
             const query = this.b.q;
@@ -737,14 +698,12 @@ class Transformer {
                 x[i] += xb[i];
         }
 
-        //console.log("rms norm...")
         rmsnorm(x, x, this.weights.rms_final);
         does_not_contain_nan(x);
         does_not_contain_nan(this.weights.classify);
         does_not_contain_nan(this.b.logits);
 
         // classifier into logits
-        // console.log("classifier...")
         vecmatmul(this.b.logits, this.weights.classify, x);
         does_not_contain_nan(this.b.logits);
 
@@ -801,8 +760,6 @@ class Sampler {
 
         let prob_index: ProbIndex[] = [];
 
-        //console.log(`coin = ${coin}`)
-        //console.log(`probs.length = ${probs.length}`)
 
         // sort indices in descending order of probabilities, then remove all
         // values smaller than (1 - topp) / (n - 1)
@@ -816,7 +773,6 @@ class Sampler {
             }
 	}
 	
-        //console.log(`prob_index.length = ${prob_index.length}`)
         // max sort, so we select largest prob events first
         prob_index.sort((x,y) => y.prob - x.prob);
 
@@ -852,7 +808,6 @@ class Sampler {
             for (let qi = 0; qi < logits.length; qi++)
                 logits[qi] /= this.temperature;
 
-            //console.log(`logits after temp = ${logits.slice(0,100)}...`)
             for (let i = 0; i < logits.length; i++) {
                 if (Number.isNaN(logits[i])) {
                     console.log(i);
@@ -862,7 +817,6 @@ class Sampler {
 
             softmax(logits);
 
-            //console.log(`logits after softmax = ${logits.slice(0,100)}...`)
             let coin = Math.random();
             if (this.topp <= 0 || this.topp >= 1) {
                 // sample from the predicted probability distribution
@@ -906,7 +860,7 @@ function generate_response(prompt: string): string {
     // encode & decode seem to be working properly
     console.log(`prompt_tokens = ${prompt_tokens}`)
     for (let i = 0; i < prompt_tokens.length; i++) {
-        console.log(`-> ${tokenizer.decode(BOS, prompt_tokens[i])}`);
+        console.log(`=> ${tokenizer.decode(BOS, prompt_tokens[i])}`);
     }
 
     let response: string = "";
@@ -915,21 +869,17 @@ function generate_response(prompt: string): string {
     let next_token: number; // will store the next token in the sequence
     let token = prompt_tokens[i];
     while (i < steps) {
-        console.log(`passing in token ${i} (.id = ${token}) (${tokenizer.decode(BOS, token)})`);
+        console.log(`\nForward on tok${i} (.id = ${token}) (${tokenizer.decode(BOS, token)})`);
         let logits = transformer.forward(token, i);
 
-        //console.log("start sampling...")
         if (i < prompt_tokens.length - 1) {
             // if we are still processing the input prompt, force the next prompt toke
             next_token = prompt_tokens[i + 1];
         } else {
             // otherwise sample the next token from the logits
-            // console.log(`logits = ${logits.slice(0,100)}...`)
             next_token = sampler.sample(logits);
         }
 
-        //console.log(`got next_token = ${next_token} ()`)
-        //console.log("done sampling...")
         i += 1;
 
         // terminating condition:BOS (=1) token delimits sequences
@@ -952,6 +902,6 @@ const rl = readline.createInterface({
     output: process.stdout,
 });
 rl.question("Prompt: ", (prompt: string) => {
-    console.log(`Response: ${generate_response(prompt)}!`);
+    console.log(`Response:\n\n${generate_response(prompt)}`);
     rl.close();
 });
