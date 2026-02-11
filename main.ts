@@ -427,11 +427,24 @@ class FileLoader {
             rms_final: new Float32Array(dim),
             classify: new Float32Array(dim * config.vocab_size),
         };  
-  
+
         let readIntoBuffer = (
             buff: Float32Array, position: number
         ) => {
-            return fs.readSync(this.f, buff, 0, 4* buff.length, position);
+            if ((buff.length*4) >= 2**30)
+                console.log(`Reading weights of size = ${((4 * buff.length) / 1000 / 1000).toFixed(1)} MB`);
+
+            // read in chunks smaller than 2^31, because it gets casted into an i32
+            let amountRead = 0;
+            let amountLeft = 4 * buff.length;
+            const LOTS = 2**31 - 1;
+            while (amountLeft != 0) {
+                let bytesRead = fs.readSync(
+                    this.f, buff, amountRead, Math.min(LOTS, amountLeft), position + amountRead);
+                amountRead += bytesRead;
+                amountLeft -= bytesRead;
+            }
+            return amountRead;
         }
     
         let position = FileLoader.CONFIG_NUM_BYTES;
@@ -530,7 +543,6 @@ class Transformer {
         ));
 
         for (let layer_i = 0; layer_i < this.config.n_layers; layer_i++) {
-
             rmsnorm(
                 xb,
                 x,
