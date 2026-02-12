@@ -1,5 +1,25 @@
 import fs from 'fs';
 
+interface ProfileStats {
+    decode_ms: number,
+    encode_ms: number,
+    sample_ms: number,
+    load_ms: number,
+    forward_ms: number,
+    vecmatmul_ms: number,
+    softmax_ms: number,
+};
+
+const profile_stats: ProfileStats = {
+   decode_ms: 0,
+   encode_ms: 0,
+   sample_ms: 0,
+   load_ms: 0,
+   forward_ms: 0,
+   vecmatmul_ms: 0,
+   softmax_ms: 0, 
+};
+
 // U must be comparable
 function bsearch<T, U>(
     xs: T[],
@@ -113,8 +133,6 @@ class Tokenizer {
     encode(
         text: string, bos: boolean, eos: boolean
     ): number[] {
-        // if (text == "") throw "text cannot be empty";
-
         if (this.sorted_vocab.length == 0) {
             // lazily alloc and sort the vocabulary
             for (let i = 0; i < this.vocab_size; i++) {
@@ -214,7 +232,7 @@ class Tokenizer {
 
         // optional EOS (</s>) token
         if (eos) tokens.push(EOS);
-
+ 
         return tokens;
     }
     decode(prev_token: number, token: number): string {
@@ -268,6 +286,8 @@ function rmsnorm(
 }
 
 function softmax(x: Float32Array) {
+    const start_time = Date.now();
+
     let max_val = x[0];
     for (let i = 1; i < x.length; i++) {
         if (x[i] > max_val) {
@@ -283,6 +303,10 @@ function softmax(x: Float32Array) {
 
     for (let i = 0; i < x.length; i++)
         x[i] /= sum;
+
+    profile_stats.softmax_ms += (
+        Date.now() - start_time
+    );
 }
 
 function vecmatmul(
@@ -290,6 +314,8 @@ function vecmatmul(
     M: Float32Array,   // (n, m)
     x: Float32Array,   // (n,)
 ) {
+    const start_time = Date.now();
+
     const n = x.length;
     const m = out.length;
     if (M.length != out.length * x.length) {
@@ -303,6 +329,10 @@ function vecmatmul(
             val += x[j] * M[i * n + j];
         out[i] = val;
     }
+
+    profile_stats.vecmatmul_ms += (
+        Date.now() - start_time
+    );
 }
 
 function view(
@@ -764,7 +794,7 @@ class Sampler {
                     prob: probs[i],
                 });
             }
-	    }
+	}
 	
         // max sort, so we select largest prob events first
         prob_index.sort((x,y) => y.prob - x.prob);
@@ -801,7 +831,6 @@ class Sampler {
             for (let qi = 0; qi < logits.length; qi++)
                 logits[qi] /= this.temperature;
 
-            // does_not_contain_nan(logits);
             softmax(logits);
 
             let coin = Math.random();
@@ -825,6 +854,9 @@ interface InputParameters {
 };
 
 function generate_response(params: InputParameters, prompt: string): string {
+
+    let start_time = Date.now();
+
     const fileLoader = new FileLoader(params.checkpoint_path);
     const config = fileLoader.load_config();
     console.log(`\nconfig = ${JSON.stringify(config, null, 2)}\n`);
@@ -842,10 +874,20 @@ function generate_response(params: InputParameters, prompt: string): string {
     console.log("loading Sampler...");
     const sampler = new Sampler(params.temperature, params.topp);
     
+    profile_stats.load_ms += (
+        Date.now() - start_time
+    );
+
+    start_time = Date.now();
+
     let prompt_tokens = tokenizer.encode(
         prompt, true, false);
     if (prompt_tokens.length < 1)
         throw "ERROR: too few tokens"
+
+    profile_stats.encode_ms += (
+        Date.now() - start_time
+    );
 
     // encode & decode seem to be working properly
     console.log("\nPrompt Tokens")
@@ -853,7 +895,7 @@ function generate_response(params: InputParameters, prompt: string): string {
     for (let i = 0; i < prompt_tokens.length; i++) {
         console.log(`[${i}]\t${tokenizer.decode(BOS, prompt_tokens[i])}`);
     }
-    console.log()
+    console.log();
 
     let start_time_ms = Date.now();
     let response: string = "";
@@ -862,12 +904,24 @@ function generate_response(params: InputParameters, prompt: string): string {
     let next_token: number; // will store the next token in the sequence
     let token = prompt_tokens[i];
     while (i < params.max_steps) {
+        let start_time = Date.now();
+
         let logits = transformer.forward(token, i);
+ 
+        profile_stats.forward_ms += (
+            Date.now() - start_time
+        ); 
 
         if (i < prompt_tokens.length - 1) {
             next_token = prompt_tokens[i + 1];
         } else {
+            let start_time = Date.now();
+
             next_token = sampler.sample(logits);
+ 
+            profile_stats.sample_ms += (
+                Date.now() - start_time
+            ); 
         }
 
         i += 1;
@@ -875,19 +929,37 @@ function generate_response(params: InputParameters, prompt: string): string {
         // terminating condition: BOS (=1) token delimits sequences
         if (next_token == 1) { break; }
 
+        start_time = Date.now();
+
         // print the token as string, decode it with the Tokenizer object
         let piece = tokenizer.decode(token, next_token);
         response += piece;
         process.stdout.write(piece);
         
+        profile_stats.decode_ms += (
+            Date.now() - start_time
+        ); 
+        
         token = next_token;
     }
     
+    let total_ms = (Date.now() - start_time_ms);
+
     console.log("\n\nStats:");
-    console.log(`${(1000 * i / (Date.now() - start_time_ms)).toFixed(1)}\ttps`);
+    console.log(`${(1000 * i / (total_ms)).toFixed(1)}\ttps`);
     console.log(`${i}\ttokens`);
     console.log(`${params.temperature}\ttemperature`);
     console.log(`${params.topp}\ttopp`);
+
+    console.log("\nProfile Stats:");
+    console.log(`${(total_ms).toFixed(1)} ms\ttotal`);
+    console.log(`${(profile_stats.load_ms).toFixed(1)} ms\tload`);
+    console.log(`${(profile_stats.encode_ms).toFixed(1)} ms\tencode`);
+    console.log(`${(profile_stats.decode_ms).toFixed(1)} ms\tdecode`);
+    console.log(`${(profile_stats.forward_ms).toFixed(1)} ms\tforward (${(100 * profile_stats.forward_ms / total_ms).toFixed(1)}%)`);
+    console.log(`${(profile_stats.sample_ms).toFixed(1)} ms\tsample`);
+    console.log(`${(profile_stats.softmax_ms).toFixed(1)} ms\tsoftmax`);
+    console.log(`${(profile_stats.vecmatmul_ms).toFixed(1)} ms\tvecmatmul (${(100 * profile_stats.vecmatmul_ms/total_ms).toFixed(1)}%)`);
 
     return response;
 }
