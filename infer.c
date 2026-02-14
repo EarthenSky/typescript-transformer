@@ -12,6 +12,47 @@ static void vecmatmul(float *out, float *M, float *x, int32_t n, int32_t m) {
     }
 }
 
+// TODO: profile just a single one of these runs and try to figure out whether the cpu or memory bandwidth is limiting.
+
+// L2 cache is ~3 MB
+// L1 cache is 288 KiB
+
+// NOTE: this version is slower, and I wonder if it's because its not being unrolled? Or maybe it's the
+// extra zero assignments at the start
+
+// Loading M will completely fill each cache line (64 bytes), allowing us
+// to do column major traversal of our array without cache issues
+#define VECMATMUL_TILE_SIZE (16)
+
+static void vecmatmul_tiled(float *out, float *M, float *x, int32_t n, int32_t m) {
+    for (int oi = 0; oi < m; oi++)
+        out[oi] = 0.0;
+
+    int xi = 0;
+    while ((xi + VECMATMUL_TILE_SIZE - 1) < n) {
+        for (int oi = 0; oi < m; oi++) {
+            // TODO: gcc unroll this loop please
+            for (int i = 0; i < VECMATMUL_TILE_SIZE; i++) {
+                // x[xi .. xi+16] now hopefully lives in a single L1 cache line the entire loop,
+                // so we avoid fetching excess memory
+                out[oi] += M[n * oi + xi + i] * x[xi + i];
+            }
+        }
+
+        xi += VECMATMUL_TILE_SIZE;
+    }
+
+    while (xi < n) {
+        // curr_x can now hopefully live in register the entire loop,
+        // so we avoid fetching excess memory
+        float curr_x = x[xi];
+        for (int oi = 0; oi < m; oi++) {
+            out[oi] += M[n * oi + xi] * curr_x;
+        }
+        xi++;
+    }
+}
+
 static napi_value vecmatmul_wrapper(
     napi_env env, napi_callback_info info
 ) {

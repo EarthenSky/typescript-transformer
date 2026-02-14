@@ -15,11 +15,13 @@
 - For the chat model, input your text like `[INST] <<SYS>>\nYou are a lovely human being.\n<</SYS>>\n\nWhat is the third best colour? [/INST]`
 ## Performance
 
-|       | us        | llama2.c  | notes|
-| ----- | --------- | --------- | ---- |
-| 15M   | 50.1 tps  | 77.9 tps  |      |
-| 42M   | 19.3 tps  | 25.9 tps  |      |
-| 7000M |           | 0.003 tps | My computer is extremely memory (200MB/s disk) bound |
+|       | us (.ts)  | us (napi)   | llama2.c  | notes    |
+| ----- | --------- | ----------- | --------- | -------- |
+| 15M   | 50.1 tps  | 66.5 tps    | 77.9 tps  |          |
+| 42M   | 19.3 tps  | 24.7 tps    | 25.9 tps  |          |
+| 7000M |           |             | 0.003 tps | My computer is extremely memory (200MB/s disk) bound |
+
+It looks like Node doesn't vectorize loops like ours, while our Napi C library does. The difference between our napi library and llama2.c is everything that's not vecmatmul.
 
 ## how to download weights
 - Go to meta website, the dropdown has llama2. You'll have to run their script download.sh, passing in the URL you were provided.
