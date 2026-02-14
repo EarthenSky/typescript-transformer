@@ -1,5 +1,9 @@
 import fs from 'fs';
 
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const infer = require('../build/Release/infer.node');
+
 interface ProfileStats {
     decode_ms: number,
     encode_ms: number,
@@ -335,6 +339,20 @@ function vecmatmul(
     );
 }
 
+function ivecmatmul(
+    out: Float32Array,
+    M: Float32Array,
+    x: Float32Array,
+) {
+    const start_time = Date.now();
+
+    infer.vecmatmul(out, M, x);
+
+    profile_stats.vecmatmul_ms += (
+        Date.now() - start_time
+    );
+}
+
 function view(
     x: Float32Array,
     start: number,
@@ -585,17 +603,17 @@ class Transformer {
             const key   = view(this.b.key_cache, layer_off + position * kv_dim, kv_dim);
             const value = view(this.b.value_cache, layer_off + position * kv_dim, kv_dim);
              
-            vecmatmul(
+            ivecmatmul(
                 query,
                 view(this.weights.query, layer_i * dim * dim, dim * dim),
                 xb
             );
-            vecmatmul(
+            ivecmatmul(
                 key,
                 view(this.weights.key, layer_i * dim * kv_dim, dim * kv_dim),
                 xb
             );
-            vecmatmul(
+            ivecmatmul(
                 value,
                 view(this.weights.value, layer_i * dim * kv_dim, dim * kv_dim),
                 xb
@@ -664,7 +682,7 @@ class Transformer {
             }
 
             // final matmul to get the output of the attention
-            vecmatmul(
+            ivecmatmul(
                 xb2,
                 view(this.weights.output, layer_i * dim * dim, dim * dim),
                 xb
@@ -680,7 +698,7 @@ class Transformer {
             );
 
             // w2 @ (silu(w1 @ x) * (w3 @ x))
-            vecmatmul(
+            ivecmatmul(
                 hb,
                 view(
                     this.weights.ffn1,
@@ -689,7 +707,7 @@ class Transformer {
                 ),
                 xb
             );
-            vecmatmul(
+            ivecmatmul(
                 hb2,
                 view(
                     this.weights.ffn3,
@@ -710,7 +728,7 @@ class Transformer {
             }
 
             // last matmul: w2 @ ...
-            vecmatmul(
+            ivecmatmul(
                 xb,
                 view(
                     this.weights.ffn2,
@@ -728,7 +746,7 @@ class Transformer {
         rmsnorm(x, x, this.weights.rms_final);
 
         // classifier into logits
-        vecmatmul(this.b.logits, this.weights.classify, x);
+        ivecmatmul(this.b.logits, this.weights.classify, x);
         does_not_contain_nan(this.b.logits);
 
         return this.b.logits;

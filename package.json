@@ -12,7 +12,7 @@
     "typescript": "^5.9.3"
   },
   "scripts": {
-    "build": "cmake-js compile --debug && yarn tsc",
+    "build": "cmake-js compile --release && yarn tsc",
     "release": "node dist/main.js",
     "start": "node --enable-source-maps dist/main.js"
   },

@@ -31,8 +31,11 @@
     "noUncheckedSideEffectImports": true,
     "moduleDetection": "force",
     "skipLibCheck": true,
+     
+    "esModuleInterop": true
   },
   "include": [
-    "main.ts"
+    "main.ts",
+    "infer.d.ts"
   ]
 }
