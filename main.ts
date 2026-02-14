@@ -897,6 +897,11 @@ function generate_response(params: InputParameters, prompt: string): string {
     }
     console.log();
 
+    if (params.max_steps > config.seq_len) {
+        console.log(`WARNING: params.max_steps = ${config.seq_len}, to avoid overflowing the context window.\n`);
+        params.max_steps = config.seq_len;
+    }
+
     let start_time_ms = Date.now();
     let response: string = "";
 
@@ -953,13 +958,13 @@ function generate_response(params: InputParameters, prompt: string): string {
 
     console.log("\nProfile Stats:");
     console.log(`${(total_ms).toFixed(1)} ms\ttotal`);
-    console.log(`${(profile_stats.load_ms).toFixed(1)} ms\tload`);
-    console.log(`${(profile_stats.encode_ms).toFixed(1)} ms\tencode`);
-    console.log(`${(profile_stats.decode_ms).toFixed(1)} ms\tdecode`);
-    console.log(`${(profile_stats.forward_ms).toFixed(1)} ms\tforward (${(100 * profile_stats.forward_ms / total_ms).toFixed(1)}%)`);
-    console.log(`${(profile_stats.sample_ms).toFixed(1)} ms\tsample`);
-    console.log(`${(profile_stats.softmax_ms).toFixed(1)} ms\tsoftmax`);
-    console.log(`${(profile_stats.vecmatmul_ms).toFixed(1)} ms\tvecmatmul (${(100 * profile_stats.vecmatmul_ms/total_ms).toFixed(1)}%)`);
+    console.log(`${(profile_stats.load_ms).toFixed(1)} ms \tload`);
+    console.log(`${(profile_stats.encode_ms).toFixed(1)} ms \tencode`);
+    console.log(`${(profile_stats.decode_ms).toFixed(1)} ms \tdecode`);
+    console.log(`${(profile_stats.forward_ms).toFixed(1)} ms \tforward (${(100 * profile_stats.forward_ms / total_ms).toFixed(1)}%)`);
+    console.log(`${(profile_stats.sample_ms).toFixed(1)} ms \tsample`);
+    console.log(`${(profile_stats.softmax_ms).toFixed(1)} ms \tsoftmax`);
+    console.log(`${(profile_stats.vecmatmul_ms).toFixed(1)} ms \tvecmatmul (${(100 * profile_stats.vecmatmul_ms/total_ms).toFixed(1)}%)`);
 
     return response;
 }
