@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include <node_api.h>
 
 // x is n, M is (n,m)
@@ -50,6 +51,26 @@ static void vecmatmul_tiled(float *out, float *M, float *x, int32_t n, int32_t m
             out[oi] += M[n * oi + xi] * curr_x;
         }
         xi++;
+    }
+}
+
+static void vecmatmul_Mf16(float *out, uint8_t *M, float *x, int32_t n, int32_t m) {
+    // TODO: implement this
+    /*
+    for (int j = 0; j < m; j++) {
+        float f = 0.0;
+        for (int i = 0; i < n; i++) {
+            f += M[n * j + i] * x[i];
+        }
+        out[j] = f;
+    }
+    */
+}
+
+static void f32_to_f16(uint8_t *out, float *in, size_t in_size) {
+    for (size_t i = 0; i < in_size; i++) {
+        _Float16 f = in[i];
+        memcpy(out + 2*i, &f, 2);
     }
 }
 
