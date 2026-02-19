@@ -377,6 +377,7 @@ interface Config {
     seq_len: number;
 
     shared_weights: boolean;
+    compression_mode: CompressionMode;
 }
 interface Weights {
     // stores the embedding for each token
@@ -397,6 +398,10 @@ interface Weights {
 
     rms_final: Float32Array; // (dim,)
     classify: Float32Array; // (dim, vocab_size)
+
+    // 
+
+    f16_classify: Uint8Array; // dim * vocab_size * 2
 }
 interface RuntimeBuffers {
     // current wave of activations
@@ -423,13 +428,17 @@ class FileLoader {
 
     readonly f: number;
 
-    constructor (checkpoint_path: string) {
+    constructor (
+        checkpoint_path: string,
+    ) {
         this.f = fs.openSync(checkpoint_path, "r");
         if (this.f == null)
             throw "ERROR: bad checkpoint path"
     }
 
-    load_config(): Config {
+    load_config(
+        compression_mode: CompressionMode
+    ): Config {
         const data = new Uint8Array(FileLoader.CONFIG_NUM_BYTES);
         const bytes_read = fs.readSync(this.f, data, 0, FileLoader.CONFIG_NUM_BYTES, 0);
         if (bytes_read != FileLoader.CONFIG_NUM_BYTES)
@@ -447,10 +456,13 @@ class FileLoader {
             seq_len:    view.getInt32(6 * 4, true),
 
             shared_weights: vocab_size > 0,
+            compression_mode: compression_mode,
         };
         return config;
     }
 
+    // TODO: load from different kinds of checkpoints, this is from an f32 checkpoint
+    // TODO: extend or from scratch the python script karpathy made
     load_weights(config: Config): Weights {
         const dim = config.dim;
         const head_size = dim / config.n_heads;
@@ -474,6 +486,8 @@ class FileLoader {
 
             rms_final: new Float32Array(dim),
             classify: new Float32Array(dim * config.vocab_size),
+
+            f16_classify: new Uint8Array(0),
         };  
 
         let readIntoBuffer = (
@@ -521,6 +535,12 @@ class FileLoader {
             position += readIntoBuffer(weights.classify, position);
         }
 
+        if (config.compression_mode == CompressionMode.F16) {
+            // TOSO: maybe this can just store "compressed weights" ?
+            weights.f16_classify = new Uint8Array(dim * config.vocab_size * 2);
+            infer.f32_to_f16(weights.f16_classify, weights.classify);
+        } 
+
         return weights; 
     }
 }
@@ -534,11 +554,16 @@ function does_not_contain_nan(x:any) {
     }
 }
 
+enum CompressionMode {
+    F32,
+    F16
+}
+
 class Transformer {
     constructor(
         readonly config: Config,
         readonly weights: Weights,
-        readonly b: RuntimeBuffers
+        readonly b: RuntimeBuffers,
     ) {}
 
     static create_buffers(config: Config): RuntimeBuffers {
@@ -584,7 +609,7 @@ class Transformer {
         let hb = this.b.hb;
         let hb2 = this.b.hb2;
     
-	    x.set(view(
+	x.set(view(
             this.weights.token_embedding_table,
             token * dim, 
             dim
@@ -746,7 +771,13 @@ class Transformer {
         rmsnorm(x, x, this.weights.rms_final);
 
         // classifier into logits
-        ivecmatmul(this.b.logits, this.weights.classify, x);
+        if (this.config.compression_mode = CompressionMode.F16) {
+            infer.vecmatmul_Mf16(
+                this.b.logits,
+                this.weights.f16_classify, x);
+        } else {
+            ivecmatmul(this.b.logits, this.weights.classify, x);
+        }
         does_not_contain_nan(this.b.logits);
 
         return this.b.logits;
@@ -876,7 +907,9 @@ function generate_response(params: InputParameters, prompt: string): string {
     let start_time = Date.now();
 
     const fileLoader = new FileLoader(params.checkpoint_path);
-    const config = fileLoader.load_config();
+
+    let compression_mode = CompressionMode.F16;
+    const config = fileLoader.load_config(compression_mode);
     console.log(`\nconfig = ${JSON.stringify(config, null, 2)}\n`);
 
     console.log("loading Transformer...");
