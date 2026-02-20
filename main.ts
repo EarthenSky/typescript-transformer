@@ -771,7 +771,7 @@ class Transformer {
         rmsnorm(x, x, this.weights.rms_final);
 
         // classifier into logits
-        if (this.config.compression_mode = CompressionMode.F16) {
+        if (this.config.compression_mode == CompressionMode.F16) {
             infer.vecmatmul_Mf16(
                 this.b.logits,
                 this.weights.f16_classify, x);
@@ -908,7 +908,8 @@ function generate_response(params: InputParameters, prompt: string): string {
 
     const fileLoader = new FileLoader(params.checkpoint_path);
 
-    let compression_mode = CompressionMode.F16;
+    let compression_mode = CompressionMode.F32;
+    // let compression_mode = CompressionMode.F16;
     const config = fileLoader.load_config(compression_mode);
     console.log(`\nconfig = ${JSON.stringify(config, null, 2)}\n`);
 

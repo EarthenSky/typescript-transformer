@@ -30,18 +30,30 @@ static void vecmatmul(float *out, float *M, float *x, int32_t n, int32_t m) {
 #pragma fp_contract(off)
 #pragma fenv_access(on)
 
+// TODO: this might be faster if i run it in parallel across j instead of i, since i would never have to reduce
 static void vecmatmul_sse2(float *out, float *M, float *x, int32_t n, int32_t m) {
     for (int j = 0; j < m; j++) {
-        float f = 0.0;
-        __m128 f = _mm_load1_ps(0.0);
-
+        __m128 f = _mm_setzero_ps();
         for (int i = 0; i+3 < n; i+=4) {
             // TODO: how to force alignment? Will it improve memory lookup speed?
             __m128 M4f = _mm_loadu_ps(&M[n * j + i]);
             __m128 x4f = _mm_loadu_ps(&x[i]);
             f = _mm_add_ps(f, _mm_mul_ps(M4f, x4f));
         }
-        out[j] = f;
+
+        for (int i = 0; i < n; i++) {
+            __m128 M1f = _mm_load_ss(&M[n * j + i]);
+            __m128 x1f = _mm_load_ss(&x[i]);
+            f = _mm_add_ss(f, _mm_mul_ss(M1f, x1f));
+        }
+
+        __m128 x = _mm_movehl_ps(f, f);
+        // y = [v0+v2,v1+v3,...]
+        __m128 y = _mm_add_ps(f, x);
+        __m128 z = _mm_shuffle_ps(y, y, _MM_SHUFFLE(1,0,2,3));
+        out[j] = _mm_cvtss_f32(_mm_add_ss(y, z));
+
+        //_mm_storeu_ps(&out[j], f);
     }
 }
 
@@ -162,6 +174,7 @@ static napi_value vecmatmul_wrapper(
         (float *)data_x,
         len_x,
         len_out);
+
 
     napi_value undefined;
     napi_get_undefined(env, &undefined);
