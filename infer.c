@@ -103,6 +103,15 @@ static void vecmatmul_tiled(float *out, float *M, float *x, int32_t n, int32_t m
     }
 }
 
+// f16 -----------------------------------------------------------------
+
+#pragma float_control(precise, off)
+#pragma fp_contract(on)
+#pragma fenv_access(off)
+
+#pragma GCC push_options
+#pragma GCC optimize ("-ffast-math")
+
 // n and m are float widths, not byte widths
 static void vecmatmul_Mf16(float *out, uint8_t *M, float *x, int32_t n, int32_t m) {
     for (int j = 0; j < m; j++) {
@@ -122,6 +131,14 @@ static void f32_to_f16(uint8_t *out, float *in, size_t in_size) {
         memcpy(&out[2*i], &f, 2);
     }
 }
+
+#pragma GCC pop_options
+
+#pragma float_control(precise, on)
+#pragma fp_contract(off)
+#pragma fenv_access(on)
+
+// ---------------------------------------------------------------------------
 
 static napi_value vecmatmul_wrapper(
     napi_env env, napi_callback_info info
