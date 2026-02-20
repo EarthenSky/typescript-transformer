@@ -2,6 +2,8 @@
 #include <string.h>
 #include <node_api.h>
 
+#include <emmintrin.h> // sse2
+
 // x is n, M is (n,m)
 static void vecmatmul(float *out, float *M, float *x, int32_t n, int32_t m) {
     for (int j = 0; j < m; j++) {
@@ -12,6 +14,23 @@ static void vecmatmul(float *out, float *M, float *x, int32_t n, int32_t m) {
         out[j] = f;
     }
 }
+
+static void vecmatmul_sse2(float *out, float *M, float *x, int32_t n, int32_t m) {
+    for (int j = 0; j < m; j++) {
+        float f = 0.0;
+        __m128 f = _mm_load1_ps(0.0);
+
+        for (int i = 0; i+3 < n; i+=4) {
+            // TODO: how to force alignment? Will it improve memory lookup speed?
+            __m128 M4f = _mm_loadu_ps(&M[n * j + i]);
+            __m128 x4f = _mm_loadu_ps(&x[i]);
+            f = _mm_add_ps(f, _mm_mul_ps(M4f, x4f));
+        }
+        out[j] = f;
+    }
+}
+
+
 
 // TODO: profile just a single one of these runs and try to figure out whether the cpu or memory bandwidth is limiting.
 
