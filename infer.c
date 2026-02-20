@@ -4,6 +4,15 @@
 
 #include <emmintrin.h> // sse2
 
+// vecmatmul -----------------------------------------------------------------
+
+#pragma float_control(precise, off)
+#pragma fp_contract(on)
+#pragma fenv_access(off)
+
+#pragma GCC push_options
+#pragma GCC optimize ("-ffast-math")
+
 // x is n, M is (n,m)
 static void vecmatmul(float *out, float *M, float *x, int32_t n, int32_t m) {
     for (int j = 0; j < m; j++) {
@@ -14,6 +23,12 @@ static void vecmatmul(float *out, float *M, float *x, int32_t n, int32_t m) {
         out[j] = f;
     }
 }
+
+#pragma GCC pop_options
+
+#pragma float_control(precise, on)
+#pragma fp_contract(off)
+#pragma fenv_access(on)
 
 static void vecmatmul_sse2(float *out, float *M, float *x, int32_t n, int32_t m) {
     for (int j = 0; j < m; j++) {
@@ -31,11 +46,14 @@ static void vecmatmul_sse2(float *out, float *M, float *x, int32_t n, int32_t m)
 }
 
 
+// ---------------------------------------------------------------------------
 
 // TODO: profile just a single one of these runs and try to figure out whether the cpu or memory bandwidth is limiting.
 
 // L2 cache is ~3 MB
 // L1 cache is 288 KiB
+
+// TODO: what are my memory bandwidths?
 
 // NOTE: this version is slower, and I wonder if it's because its not being unrolled? Or maybe it's the
 // extra zero assignments at the start

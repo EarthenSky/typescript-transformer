@@ -4,6 +4,7 @@ data
 
 # bin
 dist
+build
 
 # node
 node_modules

@@ -13,13 +13,14 @@
 ## notes
 - This implementation is heavily derived from llama2.c and is only 20-30% slower.
 - For the chat model, input your text like `[INST] <<SYS>>\nYou are a lovely human being.\n<</SYS>>\n\nWhat is the third best colour? [/INST]`
+
 ## Performance
 
-|       | us (.ts)  | us (napi)   | llama2.c  | notes    |
-| ----- | --------- | ----------- | --------- | -------- |
-| 15M   | 50.1 tps  | 66.5 tps    | 77.9 tps  |          |
-| 42M   | 19.3 tps  | 24.7 tps    | 25.9 tps  |          |
-| 7000M |           |             | 0.003 tps | My computer is extremely memory (200MB/s disk) bound |
+|       | us (.ts)  | us (napi)   | us (napi + SSE) | llama2.c  | notes    |
+| ----- | --------- | ----------- | --------------- | --------- | -------- |
+| 15M   | 50.1 tps  | 66.5 tps    | 185.7 tps       | 77.9 tps  |          |
+| 42M   | 19.3 tps  | 24.7 tps    | 73.7  tps       | 25.9 tps  |          |
+| 7000M |           |             |                 | 0.003 tps | My computer is extremely memory (200MB/s disk) bound |
 
 It looks like Node doesn't vectorize loops like ours, while our Napi C library does. The difference between our napi library and llama2.c is everything that's not vecmatmul.
 
@@ -46,3 +47,9 @@ It looks like Node doesn't vectorize loops like ours, while our Napi C library d
   - `python -m pip install -r .\requirements.txt`
   - `python export.py llama2_7b_chat.bin --meta-llama ${your-path}/Llama-2-7b-chat`
     - will probably take 25+ minutes
+
+## debugging
+- Inspect assembly of napi .node module on Windows
+  - VS Developer Command Prompt
+  - cd to correct drive
+  - dumpbin /DISASM .\build\Release\infer.node > infer.asm
