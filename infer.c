@@ -3,6 +3,7 @@
 #include <node_api.h>
 
 #include <emmintrin.h> // sse2
+#include <immintrin.h> // f32 to f16 from AVX
 
 // vecmatmul -----------------------------------------------------------------
 
@@ -13,8 +14,9 @@
 #pragma GCC push_options
 #pragma GCC optimize ("-ffast-math")
 
+// TODO: restrict?
 // x is n, M is (n,m)
-static void vecmatmul(float *out, float *M, float *x, int32_t n, int32_t m) {
+static void vecmatmul(float *out, const float *M, const float *x, int32_t n, int32_t m) {
     for (int j = 0; j < m; j++) {
         float f = 0.0;
         for (int i = 0; i < n; i++) {
@@ -30,33 +32,45 @@ static void vecmatmul(float *out, float *M, float *x, int32_t n, int32_t m) {
 #pragma fp_contract(off)
 #pragma fenv_access(on)
 
+
+// This impl is just as fast as the vecmatmul
 // TODO: this might be faster if i run it in parallel across j instead of i, since i would never have to reduce
-static void vecmatmul_sse2(float *out, float *M, float *x, int32_t n, int32_t m) {
+static void vecmatmul__sse(float *__restrict out, const float *__restrict M, const float *__restrict x, int32_t n, int32_t m) {
     for (int j = 0; j < m; j++) {
-        __m128 f = _mm_setzero_ps();
-        for (int i = 0; i+3 < n; i+=4) {
+        __m128 f0 = _mm_setzero_ps();
+        __m128 f1 = _mm_setzero_ps();
+        
+        int32_t i = 0;
+        while (i+3 < n) {
             // TODO: how to force alignment? Will it improve memory lookup speed?
-            __m128 M4f = _mm_loadu_ps(&M[n * j + i]);
-            __m128 x4f = _mm_loadu_ps(&x[i]);
-            f = _mm_add_ps(f, _mm_mul_ps(M4f, x4f));
+            __m128 M4f0 = _mm_loadu_ps(&M[n * j + i]);
+            __m128 x4f0 = _mm_loadu_ps(&x[i]);
+
+            __m128 M4f1 = _mm_loadu_ps(&M[n * j + i + 4]);
+            __m128 x4f1 = _mm_loadu_ps(&x[i + 4]);
+
+            // TODO: is the other version using FMA?
+            f0 = _mm_add_ps(f0, _mm_mul_ps(M4f0, x4f0));
+            f1 = _mm_add_ps(f1, _mm_mul_ps(M4f1, x4f1));
+            i += 8;
         }
 
-        for (int i = 0; i < n; i++) {
-            __m128 M1f = _mm_load_ss(&M[n * j + i]);
-            __m128 x1f = _mm_load_ss(&x[i]);
-            f = _mm_add_ss(f, _mm_mul_ss(M1f, x1f));
+        // a = [v0+v2,v1+v3,...]
+        __m128 a0 = _mm_add_ps(f0, _mm_movehl_ps(f0, f0));
+        // all lanes of b are v1+v3
+        __m128 b0 = _mm_shuffle_ps(a0, a0, 0b01010101);
+        out[j] = _mm_cvtss_f32(_mm_add_ss(a0, b0));
+
+        __m128 a1 = _mm_add_ps(f1, _mm_movehl_ps(f1, f1));
+        __m128 b1 = _mm_shuffle_ps(a1, a1, 0b01010101);
+        out[j] += _mm_cvtss_f32(_mm_add_ss(a1, b1));
+
+        while (i < n) {
+            out[j] += M[n * j + i] * x[i];
+            i++;
         }
-
-        __m128 x = _mm_movehl_ps(f, f);
-        // y = [v0+v2,v1+v3,...]
-        __m128 y = _mm_add_ps(f, x);
-        __m128 z = _mm_shuffle_ps(y, y, _MM_SHUFFLE(1,0,2,3));
-        out[j] = _mm_cvtss_f32(_mm_add_ss(y, z));
-
-        //_mm_storeu_ps(&out[j], f);
     }
 }
-
 
 // ---------------------------------------------------------------------------
 
@@ -104,39 +118,64 @@ static void vecmatmul_tiled(float *out, float *M, float *x, int32_t n, int32_t m
 }
 
 // f16 -----------------------------------------------------------------
+// NOTE: x86 only
 
-#pragma float_control(precise, off)
-#pragma fp_contract(on)
-#pragma fenv_access(off)
+// TODO: run f16 on cpu to ensure it works nicely.
+// THEN, implement GPTQ in python + C and check that it works on cpu
+// THEN, implement it on gpu
 
-#pragma GCC push_options
-#pragma GCC optimize ("-ffast-math")
+#if defined(__x86_64__) || defined(_M_X64)
 
 // n and m are float widths, not byte widths
-static void vecmatmul_Mf16(float *out, uint8_t *M, float *x, int32_t n, int32_t m) {
+static void vecmatmul_Mf16__sse(float *out, uint8_t *M, float *x, int32_t n, int32_t m) {
     for (int j = 0; j < m; j++) {
-        float acc = 0.0;
-        _Float16 f;
-        for (int i = 0; i < n; i++) {
-            memcpy(&f, &M[2 * (n * j + i)], 2);
-            acc += (float) f * x[i];
+        __m128 f = _mm_setzero_ps();
+        int32_t i = 0;
+
+        // TODO: unroll to improve perf
+        while (i+3 < n) {
+            __m128i f16_data = _mm_loadu_si128((__m128i const *) &M[2 * (n * j + i)]);
+            __m128 M4f = _mm_cvtph_ps(f16_data);
+            __m128 x4f = _mm_loadu_ps(&x[i]);
+            f = _mm_add_ps(f, _mm_mul_ps(M4f, x4f));
+            i += 4;
         }
-        out[j] = acc;
+
+        while (i < n) {
+            uint16_t f16;
+            memcpy(&f16, &M[2 * (n * j + i)], 2);
+            // TODO: can we set just the lowest item?
+            __m128 M1f = _mm_cvtph_ps(_mm_set1_epi16(f16));
+            __m128 x1f = _mm_load_ss(&x[i]);
+            f = _mm_add_ss(f, _mm_mul_ss(M1f, x1f));
+            i++;
+        }
+
+        __m128 a = _mm_add_ps(f, _mm_movehl_ps(f, f));
+        __m128 b = _mm_shuffle_ps(a, a, 0b01010101);
+        out[j] = _mm_cvtss_f32(_mm_add_ss(a, b));
     }
 }
 
-static void f32_to_f16(uint8_t *out, float *in, size_t in_size) {
-    for (size_t i = 0; i < in_size; i++) {
-        _Float16 f = in[i];
-        memcpy(&out[2*i], &f, 2);
+static void f32_to_f16__sse(uint8_t *out, float *in, size_t in_size) {
+    size_t i = 0; 
+    while (i+3 < in_size) {
+        __m128 f32_data = _mm_loadu_ps(&in[i]);
+        __m128i f16_data = _mm_cvtps_ph(f32_data, _MM_FROUND_TO_NEAREST_INT);
+        _mm_storel_epi64((__m128i *) &out[2*i], f16_data);
+        i += 4;
+    }
+
+    while (i < in_size) {
+        __m128 f32_data = _mm_load_ss(&in[i]);
+        __m128i f16_data = _mm_cvtps_ph(f32_data, _MM_FROUND_TO_NEAREST_INT);
+        // little endian, so this moves the smallest byte
+        memcpy(&out[2*i], &f16_data, 2);
+        i++;
     }
 }
 
-#pragma GCC pop_options
-
-#pragma float_control(precise, on)
-#pragma fp_contract(off)
-#pragma fenv_access(on)
+#endif
 
 // ---------------------------------------------------------------------------
 
@@ -185,13 +224,12 @@ static napi_value vecmatmul_wrapper(
         return NULL;
     }
 
-    vecmatmul(
+    vecmatmul__sse(
         (float *)data_out,
         (float *)data_M,
         (float *)data_x,
         len_x,
         len_out);
-
 
     napi_value undefined;
     napi_get_undefined(env, &undefined);
@@ -243,12 +281,13 @@ static napi_value vecmatmul_Mf16_wrapper(
         return NULL;
     }
 
-    vecmatmul_Mf16(
+    vecmatmul_Mf16__sse(
         (float *)data_out,
         (uint8_t *)data_M,
         (float *)data_x,
         len_x,
-        len_out);
+        len_out
+    );
 
     napi_value undefined;
     napi_get_undefined(env, &undefined);
@@ -293,10 +332,11 @@ static napi_value f32_to_f16_wrapper(
         return NULL;
     }
 
-    f32_to_f16(
+    f32_to_f16__sse(
         (uint8_t *)data_out,
         (float *)data_x,
-        len_x);
+        len_x
+    );
 
     napi_value undefined;
     napi_get_undefined(env, &undefined);

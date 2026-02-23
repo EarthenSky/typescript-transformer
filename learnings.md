@@ -7,5 +7,17 @@
 
 ## 2 - CUDA time
 - We've learned that we are EXTREMELY memory bound. Our goal is to run the 7B param model, which takes up ~ 28GB at 32bit precision.
-- I have a 3060, which have 12GB of VRAM. This means we only have to compress our model down to 10GB. Int8 quantization seems reasonable considering that models tend to normalize, so that's the first step; we have to quantize first!
-- 
+- (1) I have a 3060, which have 12GB of VRAM. This means we only have to compress our model down to 10GB. Int8 quantization seems reasonable considering that models tend to normalize, so that's the first step; we have to quantize first! Or maybe implement 4 bit blockwise?
+- (2) Next, I want to see if there are any easy ways of 
+
+## 3 - SIMD Notes
+- MMX -> 64 bit wide, good for parallelizing uint8 math. No float support, sadly.
+- SSE
+  - sse -> 32bit float addition at 4 floats per register
+  - sse2 -> packed integer support, lots of helpers
+  - sse3 -> some extra integer and loading utils
+  - ssse3 -> even more integer helpers
+  - sse4.1 -> max, round, helpers. Dot product instruction!
+  - sse4.2 -> more text features and crc32 (checksum)
+- AVX
+  - 

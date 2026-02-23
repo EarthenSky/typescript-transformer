@@ -609,7 +609,7 @@ class Transformer {
         let hb = this.b.hb;
         let hb2 = this.b.hb2;
     
-	x.set(view(
+        x.set(view(
             this.weights.token_embedding_table,
             token * dim, 
             dim
@@ -774,7 +774,9 @@ class Transformer {
         if (this.config.compression_mode == CompressionMode.F16) {
             infer.vecmatmul_Mf16(
                 this.b.logits,
-                this.weights.f16_classify, x);
+                this.weights.f16_classify,
+                x
+            );
         } else {
             ivecmatmul(this.b.logits, this.weights.classify, x);
         }
@@ -903,13 +905,12 @@ interface InputParameters {
 };
 
 function generate_response(params: InputParameters, prompt: string): string {
-
     let start_time = Date.now();
 
     const fileLoader = new FileLoader(params.checkpoint_path);
 
-    let compression_mode = CompressionMode.F32;
-    // let compression_mode = CompressionMode.F16;
+    const compression_mode = CompressionMode.F32;
+    // const compression_mode = CompressionMode.F16;
     const config = fileLoader.load_config(compression_mode);
     console.log(`\nconfig = ${JSON.stringify(config, null, 2)}\n`);
 
