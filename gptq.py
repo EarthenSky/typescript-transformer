@@ -20,25 +20,46 @@ def matmul(m1, m2, n:int, m:int, o:int) -> np.ndarray:
 
     return out
 
-def vecmatmul_uppertri(out, mut, v, n:int, m:int):
-    pass
-
 # returns L^T
-def spd_chomsky_decomp(m1: n:int, m:int) -> np.ndarray:
+def spd_chomsky_decomp(m1: n:int) -> np.ndarray:
+    # it would be more efficient to store this sparsely
+    R = np.zeros((n, n))
     # TODO: what happens to the output if m1 is not psd?
-    pass
+    for i in range(n):
+        pass
+        rki_total = 0
+        for k in range(i):
+            rki_total += R[k * n + i] ** 2
+        aii = m1[i * n + i]
+        R[i * n + i] = sqrt(aii - (rki_total))
 
-# solve for x in Rx = y <=> x = (R^-1)y
-def uppertri_solve(m1, v, n:int, m:int)
-    pass
+        for j in range(i+1):
+
+            R[i * n + j] = rnn
+
+# solve for Rx = v, where v is a sparse vector
+# containing vj at j
+def early_exit_backsubstitution_inplace(
+    out, R, vj, j, n:int, m:int
+):
+    # TODO: we can reuse tmp's memory between calls
+    s = np.zeroes(n)
+    s[j] = vj
+
+    for xi in range(j+1):
+        # solve for outi
+        out[xi] = s[yi] / R[(j - xi) * m + (j - xi)]
+        for yi in range(n):
+            s[yi] -= R[yi * m + (j - xi)] * out[xi]
 
 def spd_matinv(m1, n:int, m:int) -> np.ndarray:
     R = spd_chomsky_decomp(m1, n, m)
-    out = np.zeroes((n, m))
 
+    out = np.zeroes((n, m))
     for j in range(m):
-        early_exit_backsubstitution_inplace(out, R[j * m + j], j, n, m) 
+        early_exit_backsubstitution_inplace(out[j,:], R, R[j * m + j], j, n, m) 
     
+    # symmetry
     for i in range(n):
         for j in range(m):
             if i > j:
