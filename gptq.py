@@ -1,3 +1,4 @@
+import math
 import numpy as np
 
 QUANT_SYM_4BIT=0
@@ -6,6 +7,11 @@ def quant_sym_4bit(x:float) -> int:
     rounded = int(round(x))
     return max(-8, min(7, rounded))
     
+def transpose(out, m1, width:int, height:int):
+    for i in range(height):
+        for j in range(width):
+            m1[j * height + i] = out[i * width + j]
+
 # n is height, m is width, m is height2, o is width2
 def matmul(out, m1, m2, n:int, m:int, o:int):
     height1 = n
@@ -40,7 +46,7 @@ def spd_cholesky_decomp(m1, n:int) -> np.ndarray:
         for k in range(i+1):
             rki_total += R[k * n + i] ** 2
         aii = m1[i * n + i]
-        R[i * n + i] = sqrt(aii - (rki_total))
+        R[i * n + i] = math.sqrt(aii - (rki_total))
 
 # solve for Rx = v, where v is a sparse vector
 # containing vj at j
@@ -85,7 +91,7 @@ def gptq(
     E = np.zeros(height * B) 
     # TODO: cholesky inverse H, then get cholesky upper tri of H_inv
     X_T = np.zeros(num_examples * width)
-    transpose(X_T, X)
+    transpose(X_T, X, width, num_examples)
     H = matmul(X, X_T, width, num_examples, width)
     for i in range(width * width):
         H[i] = 2 * H[i]
@@ -136,7 +142,7 @@ def gptq(
                 W[yi * width + xi] -= tmp[yi * width + xi]
 
 def random_upper(size:int):
-    m1 = np.random(size)
+    m1 = np.random.rand(size * size)
     for i in range(size):
         for j in range(i):
              m1[j * size + i] = 0
@@ -145,17 +151,18 @@ def random_upper(size:int):
 if __name__ == "__main__":
     size = 4
     R = random_upper(size)
-    R_T = np.zeros(size * size)
-    transpose(R_T, R)
+    print(f"R = {R}")
 
-    print(R)
+    R_T = np.zeros(size * size)
+    transpose(R_T, R, size, size)
+
     print(R_T)
     A = np.zeros(size * size)
     matmul(A, R, R_T, size, size, size)
     print(A)
 
     # TODO: this part of the test
-    R_prime = spd_cholesky_decomp(A, sixe)
+    R_prime = spd_cholesky_decomp(A, size)
     print(R_prime)
 
     for i in range(size * size):
