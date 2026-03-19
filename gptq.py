@@ -10,7 +10,7 @@ def quant_sym_4bit(x:float) -> int:
 def transpose(out, m1, width:int, height:int):
     for i in range(height):
         for j in range(width):
-            m1[j * height + i] = out[i * width + j]
+            out[j * height + i] = m1[i * width + j]
 
 # n is height, m is width, m is height2, o is width2
 def matmul(out, m1, m2, n:int, m:int, o:int):
@@ -29,24 +29,35 @@ def matmul(out, m1, m2, n:int, m:int, o:int):
 # returns L^T
 def spd_cholesky_decomp(m1, n:int) -> np.ndarray:
     # it would be more efficient to store this sparsely
-    # R = np.zeros(n * n)
-    R = m1.copy()
+    R = np.zeros(n * n)
+    # R = m1.copy()
 
     # TODO: what happens to the output if m1 is not psd?
     for i in range(n):
         # fix i, use all j up until but not including j
         for j in range(i):
-            inv_rii = 1 / R[j * n + j]
             r_sum = 0.0
             for k in range(j):
                 r_sum += R[k * n + j] * R[k * n + i]
+
+            inv_rii = 1 / R[j * n + j]
             R[j * n + i] = inv_rii * (m1[j * n + i] - r_sum)
+
+            #print(f"{i}, {j} = {inv_rii}, {R[j * n + i]}")
 
         rki_total = 0
         for k in range(i+1):
             rki_total += R[k * n + i] ** 2
+
+        # clamp to zero, in case aii - rki_total
         aii = m1[i * n + i]
-        R[i * n + i] = math.sqrt(aii - (rki_total))
+        if (aii - rki_total) > 0:
+            R[i * n + i] = math.sqrt(aii - rki_total)
+        else:
+            print(aii - rki_total)
+            R[i * n + i] = 0
+
+    return R
 
 # solve for Rx = v, where v is a sparse vector
 # containing vj at j
@@ -66,9 +77,10 @@ def early_exit_backsubstitution_inplace(
 def spd_matinv(m1, n:int, m:int) -> np.ndarray:
     R = spd_cholesky_decomp(m1, n, m)
 
-    out = np.zeroes((n, m))
+    out = np.zeroes(n * m)
     for j in range(m):
-        early_exit_backsubstitution_inplace(out[j,:], R, R[j * m + j], j, n, m) 
+        # TODO: out need to be row major, then we need to take the transpose
+        early_exit_backsubstitution_inplace(out[j * m], R, R[j * m + j], j, n, m) 
     
     # symmetry
     for i in range(n):
@@ -145,32 +157,31 @@ def random_upper(size:int):
     m1 = np.random.rand(size * size)
     for i in range(size):
         for j in range(i):
-             m1[j * size + i] = 0
+             m1[i * size + j] = 0
     return m1
 
 if __name__ == "__main__":
     size = 4
     R = random_upper(size)
-    print(f"R = {R}")
-
     R_T = np.zeros(size * size)
     transpose(R_T, R, size, size)
 
-    print(R_T)
     A = np.zeros(size * size)
-    matmul(A, R, R_T, size, size, size)
-    print(A)
+    matmul(A, R_T, R, size, size, size)
+    # TODO: we can try regularizing A
+    # print(f"A = {A} of len {len(A)}")
 
-    # TODO: this part of the test
     R_prime = spd_cholesky_decomp(A, size)
     print(R_prime)
 
     for i in range(size * size):
         if abs(R[i] - R_prime[i]) >= 0.01:
-            raise f"error at i = {i}; diff = {R[i] -R_prime[i]}"
+            raise Exception(f"error at i = {i}; diff = {R[i] - R_prime[i]}")
+
     # Todo: write a simple test & ensure that
     # quantization error appears low
     #N_EXAMPLES = 55
     #weights = np.zeros(128 * 128)
     #X = np.zeros(128 * N_EXAMPLES)
     #gptq(weights, X, 128, 128)
+
