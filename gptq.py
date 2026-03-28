@@ -60,28 +60,47 @@ def spd_cholesky_decomp(m1, n:int) -> np.ndarray:
     return R
 
 # solve for Rx = v, where v is a sparse vector
-# containing vj at j
-def early_exit_backsubstitution_inplace(
-    out, R, vj, j, n:int, m:int
+# containing the single element vj at j
+# where x is column xj of X
+# (R)(A^-1) = (L^-1)
+# TODO: move into spd_matinv as local func
+def spd_backsubstitution_inplace(
+    out, out_mask, R, vj, col:int, n:int
 ):
-    # TODO: we can reuse tmp's memory between calls
     s = np.zeroes(n)
-    s[j] = vj
+    s[j] = 1/vj
 
-    for xi in range(j+1):
+    # TODO: finish this function
+    for yi in range(col,n):
+        row = m - 1 - col
         # solve for outi
-        out[xi] = s[yi] / R[(j - xi) * m + (j - xi)]
-        for yi in range(n):
-            s[yi] -= R[yi * m + (j - xi)] * out[xi]
+        weighted_sun = 0.0
+        for k in range(yi):
+            xi = m - 1 - k
+            weighted_sum += out[(xi * m) + j] * R[row * m + xi
 
-def spd_matinv(m1, n:int, m:int) -> np.ndarray:
-    R = spd_cholesky_decomp(m1, n, m)
+        xi = m - 1 - yi
+        out[(xi * m) + j] = (s[yi] - weighted_sum) / R[row * m + xi]
+        # perform symmetry immediately!
+        out[(j * m) + xi] = out[(xi * m) + j]
 
-    out = np.zeroes(n * m)
-    for j in range(m):
-        # TODO: out need to be row major, then we need to take the transpose
-        early_exit_backsubstitution_inplace(out[j * m], R, R[j * m + j], j, n, m) 
-    
+
+# TODO: write a test for spd_matinv
+
+# L^-1 has diagonals 1/diag(L)
+# We can solve for R^-1(x) = L^-1 without inverting L, since back sub only needs upper diag
+def spd_matinv(m1, n:int) -> np.ndarray:
+    R = spd_cholesky_decomp(m1, n, n)
+
+    out = np.zeroes(n * n)
+    for j in range(n):
+        early_exit_backsubstitution_inplace(
+            out,
+            R,
+            R[j * n + j],
+            j, n
+        )
+
     # symmetry
     for i in range(n):
         for j in range(m):
@@ -109,7 +128,7 @@ def gptq(
         H[i] = 2 * H[i]
 
     # TODO: impl these
-    H_inv = cholesky_inv(H)
+    H_inv = spd_matinv(H)
     H_inv = cholesky(H_inv)
 
     i = 0
@@ -177,6 +196,8 @@ if __name__ == "__main__":
     for i in range(size * size):
         if abs(R[i] - R_prime[i]) >= 0.01:
             raise Exception(f"error at i = {i}; diff = {R[i] - R_prime[i]}")
+
+    spd_matinv(A, 
 
     # Todo: write a simple test & ensure that
     # quantization error appears low
