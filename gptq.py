@@ -59,53 +59,45 @@ def spd_cholesky_decomp(m1, n:int) -> np.ndarray:
 
     return R
 
-# solve for Rx = v, where v is a sparse vector
-# containing the single element vj at j
-# where x is column xj of X
-# (R)(A^-1) = (L^-1)
-# TODO: move into spd_matinv as local func
-def spd_backsubstitution_inplace(
-    out, out_mask, R, vj, col:int, n:int
-):
-    s = np.zeroes(n)
-    s[j] = 1/vj
-
-    # TODO: finish this function
-    for yi in range(col,n):
-        row = m - 1 - col
-        # solve for outi
-        weighted_sun = 0.0
-        for k in range(yi):
-            xi = m - 1 - k
-            weighted_sum += out[(xi * m) + j] * R[row * m + xi
-
-        xi = m - 1 - yi
-        out[(xi * m) + j] = (s[yi] - weighted_sum) / R[row * m + xi]
-        # perform symmetry immediately!
-        out[(j * m) + xi] = out[(xi * m) + j]
-
-
 # TODO: write a test for spd_matinv
 
 # L^-1 has diagonals 1/diag(L)
 # We can solve for R^-1(x) = L^-1 without inverting L, since back sub only needs upper diag
 def spd_matinv(m1, n:int) -> np.ndarray:
-    R = spd_cholesky_decomp(m1, n, n)
+    R = spd_cholesky_decomp(m1, n)
 
-    out = np.zeroes(n * n)
-    for j in range(n):
-        early_exit_backsubstitution_inplace(
+    # solve for Rx = v, where v is a sparse vector
+    # containing the single element vj at j
+    # where x is column xj of X
+    # (R)(A^-1) = (L^-1)
+    def spd_backsubstitution_inplace(
+        out, R, vj, col:int, n:int
+    ):
+        s = np.zeros(n)
+        s[col] = 1/vj
+
+        # row starts at col
+        for yi in range(0,col+1):
+            row = col - yi
+            weighted_sum = 0.0
+            for k in range(yi):
+                xi = n - 1 - k
+                weighted_sum += out[(xi * n) + col] * R[(row * n) + xi]
+
+            xi = n - 1 - yi
+            val = (s[yi] - weighted_sum) / R[(row * n) + xi]
+            out[(xi * n) + col] = val
+            # symmetry immediately!
+            out[(col * n) + xi] = val
+
+    out = np.zeros(n * n)
+    for col in range(n-1, -1, -1):
+        spd_backsubstitution_inplace(
             out,
             R,
-            R[j * n + j],
-            j, n
+            R[col * n + col],
+            col, n
         )
-
-    # symmetry
-    for i in range(n):
-        for j in range(m):
-            if i > j:
-                out[i * m + j] = out[j * m + i] 
 
     return out
 
@@ -197,7 +189,13 @@ if __name__ == "__main__":
         if abs(R[i] - R_prime[i]) >= 0.01:
             raise Exception(f"error at i = {i}; diff = {R[i] - R_prime[i]}")
 
-    spd_matinv(A, 
+    print("\nTest spd mat inv:")
+    A_inv = spd_matinv(A, size)
+    print(A_inv)
+
+    maybe_I = np.zeros(size * size)
+    matmul(maybe_I, A, A_inv, size, size, size)
+    print(maybe_I)
 
     # Todo: write a simple test & ensure that
     # quantization error appears low
