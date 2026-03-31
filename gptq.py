@@ -30,7 +30,6 @@ def matmul(out, m1, m2, n:int, m:int, o:int):
 def spd_cholesky_decomp(m1, n:int) -> np.ndarray:
     # it would be more efficient to store this sparsely
     R = np.zeros(n * n)
-    # R = m1.copy()
 
     # TODO: what happens to the output if m1 is not psd?
     for i in range(n):
@@ -59,12 +58,14 @@ def spd_cholesky_decomp(m1, n:int) -> np.ndarray:
 
     return R
 
-# TODO: write a test for spd_matinv
-
 # L^-1 has diagonals 1/diag(L)
 # We can solve for R^-1(x) = L^-1 without inverting L, since back sub only needs upper diag
 def spd_matinv(m1, n:int) -> np.ndarray:
     R = spd_cholesky_decomp(m1, n)
+    print("r:")
+    print(R)
+
+    # TODO: could the cholesky decomp be bad?
 
     # solve for Rx = v, where v is a sparse vector
     # containing the single element vj at j
@@ -76,19 +77,19 @@ def spd_matinv(m1, n:int) -> np.ndarray:
         s = np.zeros(n)
         s[col] = 1/vj
 
-        # row starts at col
         for yi in range(0,col+1):
             row = col - yi
             weighted_sum = 0.0
-            for k in range(yi):
-                xi = n - 1 - k
-                weighted_sum += out[(xi * n) + col] * R[(row * n) + xi]
+            for k in range(n-1, row, -1):
+                print(f"{out[k * n + col]} * {R[row * n + k]}")
+                weighted_sum += out[(k * n) + col] * R[(row * n) + k]
 
-            xi = n - 1 - yi
-            val = (s[yi] - weighted_sum) / R[(row * n) + xi]
-            out[(xi * n) + col] = val
+            val = (s[row] - weighted_sum) / R[(row * n) + row]
+            print(f"({s[row]} - {weighted_sum}) / {R[row * n + row]} val = {val} {row} {col}")
+
+            out[(row * n) + col] = val
             # symmetry immediately!
-            out[(col * n) + xi] = val
+            out[(col * n) + row] = val
 
     out = np.zeros(n * n)
     for col in range(n-1, -1, -1):
@@ -119,7 +120,6 @@ def gptq(
     for i in range(width * width):
         H[i] = 2 * H[i]
 
-    # TODO: impl these
     H_inv = spd_matinv(H)
     H_inv = cholesky(H_inv)
 
@@ -179,22 +179,23 @@ if __name__ == "__main__":
 
     A = np.zeros(size * size)
     matmul(A, R_T, R, size, size, size)
-    # TODO: we can try regularizing A
-    # print(f"A = {A} of len {len(A)}")
+    print(f"A = {A} of len {len(A)}")
 
     R_prime = spd_cholesky_decomp(A, size)
-    print(R_prime)
 
     for i in range(size * size):
         if abs(R[i] - R_prime[i]) >= 0.01:
             raise Exception(f"error at i = {i}; diff = {R[i] - R_prime[i]}")
 
-    print("\nTest spd mat inv:")
     A_inv = spd_matinv(A, size)
-    print(A_inv)
 
     maybe_I = np.zeros(size * size)
     matmul(maybe_I, A, A_inv, size, size, size)
+    I = np.identity(size).reshape(-1)
+    for i in range(size * size):
+        if abs(I[i] - maybe_I[i]) > 0.001:
+            raise Exception("Inversion: high error at i={i}")
+
     print(maybe_I)
 
     # Todo: write a simple test & ensure that
