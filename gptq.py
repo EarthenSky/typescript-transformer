@@ -33,7 +33,6 @@ def spd_cholesky_decomp(m1, n:int) -> np.ndarray:
 
     # TODO: what happens to the output if m1 is not psd?
     for i in range(n):
-        # fix i, use all j up until but not including j
         for j in range(i):
             r_sum = 0.0
             for k in range(j):
@@ -41,8 +40,6 @@ def spd_cholesky_decomp(m1, n:int) -> np.ndarray:
 
             inv_rii = 1 / R[j * n + j]
             R[j * n + i] = inv_rii * (m1[j * n + i] - r_sum)
-
-            #print(f"{i}, {j} = {inv_rii}, {R[j * n + i]}")
 
         rki_total = 0
         for k in range(i+1):
@@ -53,23 +50,13 @@ def spd_cholesky_decomp(m1, n:int) -> np.ndarray:
         if (aii - rki_total) > 0:
             R[i * n + i] = math.sqrt(aii - rki_total)
         else:
-            print(aii - rki_total)
             R[i * n + i] = 0
 
     return R
 
-# L^-1 has diagonals 1/diag(L)
-# We can solve for R^-1(x) = L^-1 without inverting L, since back sub only needs upper diag
 def spd_matinv(m1, n:int) -> np.ndarray:
     R = spd_cholesky_decomp(m1, n)
-    print("r:")
-    print(R)
 
-    # TODO: could the cholesky decomp be bad?
-
-    # solve for Rx = v, where v is a sparse vector
-    # containing the single element vj at j
-    # where x is column xj of X
     # (R)(A^-1) = (L^-1)
     def spd_backsubstitution_inplace(
         out, R, vj, col:int, n:int
@@ -81,11 +68,9 @@ def spd_matinv(m1, n:int) -> np.ndarray:
             row = col - yi
             weighted_sum = 0.0
             for k in range(n-1, row, -1):
-                print(f"{out[k * n + col]} * {R[row * n + k]}")
                 weighted_sum += out[(k * n) + col] * R[(row * n) + k]
 
             val = (s[row] - weighted_sum) / R[(row * n) + row]
-            print(f"({s[row]} - {weighted_sum}) / {R[row * n + row]} val = {val} {row} {col}")
 
             out[(row * n) + col] = val
             # symmetry immediately!
@@ -108,7 +93,7 @@ def gptq(
     height:int,
     width:int,
     # method:int
-):
+) -> np.ndarray:
     B = 128
     # TODO: look into ndarray and determine if row major 
     Q = np.zeros(height * width)
@@ -120,7 +105,7 @@ def gptq(
     for i in range(width * width):
         H[i] = 2 * H[i]
 
-    H_inv = spd_matinv(H)
+    H_inv = spd_matinv(H, width)
     H_inv = cholesky(H_inv)
 
     i = 0
@@ -164,7 +149,7 @@ def gptq(
             for xi in range(i, width):
                 W[yi * width + xi] -= tmp[yi * width + xi]
 
-def random_upper(size:int):
+def random_upper(size:int) -> np.ndarray:
     m1 = np.random.rand(size * size)
     for i in range(size):
         for j in range(i):
@@ -179,7 +164,7 @@ if __name__ == "__main__":
 
     A = np.zeros(size * size)
     matmul(A, R_T, R, size, size, size)
-    print(f"A = {A} of len {len(A)}")
+    # print(f"A = {A} of len {len(A)}")
 
     R_prime = spd_cholesky_decomp(A, size)
 
@@ -198,10 +183,22 @@ if __name__ == "__main__":
 
     print(maybe_I)
 
-    # Todo: write a simple test & ensure that
+    # TODO: write a simple test & ensure that
     # quantization error appears low
-    #N_EXAMPLES = 55
-    #weights = np.zeros(128 * 128)
-    #X = np.zeros(128 * N_EXAMPLES)
-    #gptq(weights, X, 128, 128)
+    N_EXAMPLES = 55
+    WSIZE = 128
+    W = np.random.rand(WSIZE * WSIZE)
+    X = np.zeros(WSIZE * N_EXAMPLES)
+    WQ = gptq(weights, X, WSIZE, WSIZE)
+
+    X_prime = np.zeros(WSIZE * N_EXAMPLES)
+    XQ_prime = np.zeros(WSIZE * N_EXAMPLES)
+    matmul(X_prime, W, X, WSIZE, WSIZE, N_EXAMPLES)
+    # TODO: I will need a special quantized matmul?
+    matmul(XQ_prime, WQ, X, WSIZE, WSIZE, N_EXAMPLES)
+
+    for i in range(WSIZE * N_EXAMPLES):
+        err = abs(X_prime[i] - XQ_prime[i])
+        if err >= 0.1:
+            raise Exception("Quantization had high error of {err}")
 
